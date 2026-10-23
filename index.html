@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="theme-color" content="#0b0e0d" />
+    <title>DEUSHIMA STRIKE</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" href="/vendor/three.module.js" as="script" crossorigin />
+    <link rel="stylesheet" href="/src/ui/ui.css" />
+    <link rel="stylesheet" href="/src/ui/online-ui.css" />
+    <link rel="stylesheet" href="/src/ui/classic.css" />
+    <style>
+      html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #080a09; overflow: hidden; }
+      #app { position: fixed; inset: 0; overflow: hidden; background: #080a09; }
+      #game-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; outline: 0; image-rendering: pixelated; }
+      #ui-root { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
+      #boot-screen {
+        position: absolute; inset: 0; z-index: 100; display: grid; place-items: center;
+        background:
+          linear-gradient(rgba(3, 7, 10, .72), rgba(3, 7, 10, .9)),
+          url("/assets/branding/deushima-strike.png") center/cover no-repeat,
+          #080a09;
+        color: #d9d1b8; font-family: "Trebuchet MS", Tahoma, Arial, sans-serif; letter-spacing: 0.06em;
+      }
+      #boot-screen .boot-inner { text-align: center; }
+      #boot-screen h1 { font-family: Impact, "Arial Black", sans-serif; font-size: clamp(26px, 5vw, 58px); letter-spacing: 0.1em; margin: 0 0 14px; color: #e8ddc1; font-weight: 400; text-shadow: 0 4px 0 #000, 0 0 34px rgba(210, 50, 36, .35); }
+      #boot-screen p { margin: 0; font-size: 12px; color: #a89f89; }
+      #boot-screen .boot-bar { width: 240px; height: 3px; margin: 18px auto 0; background: #2e342c; overflow: hidden; }
+      #boot-screen .boot-bar i { display: block; width: 40%; height: 100%; background: #d13f2f; animation: bootscan 1.2s ease-in-out infinite alternate; }
+      @keyframes bootscan { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game-canvas" tabindex="0"></canvas>
+      <div id="name-tags" aria-hidden="true"></div>
+      <div id="ui-root"></div>
+      <canvas id="classic-hud" aria-hidden="true"></canvas>
+      <div id="classic-menu" class="hidden"></div>
+      <div id="classic-pause" class="hidden"></div>
+      <div id="classic-banner"></div>
+      <div id="classic-killfeed"></div>
+      <div id="boot-screen">
+        <div class="boot-inner">
+          <h1>DEUSHIMA STRIKE</h1>
+          <p>CARGANDO MOTOR · GOLDSRC ASSETS · BROWSER EDITION</p>
+          <div class="boot-bar"><i></i></div>
+        </div>
+      </div>
+    </div>
+    <script type="importmap">
+      { "imports": { "three": "/vendor/three.module.js" } }
+    </script>
+    <script src="/vendor/peerjs.min.js"></script>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+﻿{
+  "name": "deushima-strike",
+  "version": "2.0.0",
+  "private": true,
+  "description": "DEUSHIMA STRIKE — CS 1.6 browser reconstruction with original GoldSrc assets, 1v1 duel and surf",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "test": "node tests/assets-check.mjs && node tests/duel-logic.test.mjs && node tests/redline-map.test.mjs",
+    "test:online": "node tests/online-e2e.mjs",
+    "build:static": "node scripts/build-static.mjs",
+    "deploy": "node scripts/build-static.mjs && node scripts/deploy-vercel.mjs",
+    "extract": "python tools/extract-assets.py && python tools/convert-smds.py && python tools/fix-hud-alpha.py"
+  },
+  "dependencies": {
+    "three": "^0.160.0"
+  }
+}
+
+
