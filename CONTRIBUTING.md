@@ -1,6 +1,6 @@
 # Colaboración y publicación — DEUSHIMA STRIKE
 
-Repositorio destino: https://github.com/Juancaina/deushima-strike
+Repositorio destino: https://github.com/Juancaina/DEUSHIMA.STRIKE
 Producción actual: https://cs16-1v1.vercel.app/
 Rama de publicación: `main`.
 
