@@ -84,6 +84,7 @@ export class RemoteAvatar {
     this.crouchAmount = 0;
     this.weaponId = this.team === 'T' ? 'glock' : 'usp';
     this.onGround = true;
+    this.reloading = false;
     this.alive = true;
     this.radius = RADIUS;
 
@@ -93,12 +94,21 @@ export class RemoteAvatar {
     this._targetCrouch = 0;
     this._targetWeaponId = this.weaponId;
     this._targetOnGround = true;
+    this._targetReloading = false;
     this._targetAlive = true;
     this._networkSpeed = null;
+    this._targetVelocity = new THREE.Vector3();
+    this._predictedPos = new THREE.Vector3();
+    this.jumpState = 'ground';
+    this._targetJumpState = 'ground';
+    this._stateTick = 0;
+    this._stateSentAt = 0;
+    this._stateReceivedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
     this._time = 0;
     this._deathTime = 0;
     this._hitFlash = 0;
+    this._shootTimer = 0;
     this._walkPhase = 0;
     this._speed = 0;
     this._disposed = false;
@@ -235,6 +245,7 @@ export class RemoteAvatar {
     this.crouchAmount = this._targetCrouch;
     this.weaponId = this._targetWeaponId;
     this.onGround = this._targetOnGround;
+    this.jumpState = this._targetJumpState;
     this._kenney?.setWeapon?.(this.weaponId);
     this.group.position.copy(this.pos);
     this.group.rotation.y = this.yaw + (this._kenney?.yawOffset || 0);
@@ -248,7 +259,21 @@ export class RemoteAvatar {
    * Estado de red recibido del otro peer.
    * @param {{x:number,y:number,z:number}|THREE.Vector3} pos
    */
-  setTarget(pos, yaw = 0, pitch = 0, crouch = false, alive = true, weaponId = null, onGround = true, moveSpeed = null) {
+  setTarget(
+    pos,
+    yaw = 0,
+    pitch = 0,
+    crouch = false,
+    alive = true,
+    weaponId = null,
+    onGround = true,
+    moveSpeed = null,
+    reloading = false,
+    velocity = null,
+    jumpState = null,
+    sentAt = 0,
+    physicsTick = 0,
+  ) {
     if (this._disposed) return;
     if (pos) {
       const x = Number(pos.x);
@@ -265,8 +290,23 @@ export class RemoteAvatar {
     this._targetCrouch = crouch ? 1 : 0;
     if (typeof weaponId === 'string' && weaponId) this._targetWeaponId = weaponId;
     this._targetOnGround = onGround !== false;
+    this._targetReloading = !!reloading;
     const nextSpeed = Number(moveSpeed);
     this._networkSpeed = Number.isFinite(nextSpeed) && nextSpeed >= 0 ? nextSpeed : null;
+    if (velocity && typeof velocity === 'object') {
+      const vx = Number(velocity.x);
+      const vy = Number(velocity.y);
+      const vz = Number(velocity.z);
+      if (Number.isFinite(vx) && Number.isFinite(vy) && Number.isFinite(vz)) {
+        this._targetVelocity.set(vx, vy, vz);
+      }
+    }
+    this._targetJumpState = jumpState === 'rise' || jumpState === 'fall'
+      ? jumpState
+      : (this._targetOnGround ? 'ground' : this._targetVelocity.y > 0.12 ? 'rise' : 'fall');
+    this._stateTick = Math.max(this._stateTick, Math.round(Number(physicsTick) || 0));
+    this._stateSentAt = Number.isFinite(Number(sentAt)) ? Number(sentAt) : 0;
+    this._stateReceivedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
     const nextAlive = alive !== false;
     this._targetAlive = nextAlive;
@@ -285,11 +325,16 @@ export class RemoteAvatar {
     const prevX = this.pos.x;
     const prevZ = this.pos.z;
 
-    // PosiciÃ³n: interpolaciÃ³n exponencial suave (el state llega a 20 Hz).
+    // Posición: interpolación + una predicción corta por velocidad. El estado
+    // llega a ~20 Hz; 80 ms de dead-reckoning reduce el jitter en bhops rápidos
+    // sin convertir la velocidad declarada por red en autoridad de gameplay.
     const posLambda = 18;
     const k = 1 - Math.exp(-posLambda * step);
-    this.pos.lerp(this._targetPos, k);
-    if (this.pos.distanceToSquared(this._targetPos) < 1e-6) this.pos.copy(this._targetPos);
+    const nowMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const age = clamp((nowMs - this._stateReceivedAt) / 1000, 0, 0.08);
+    this._predictedPos.copy(this._targetPos).addScaledVector(this._targetVelocity, age);
+    this.pos.lerp(this._predictedPos, k);
+    if (this.pos.distanceToSquared(this._predictedPos) < 1e-6) this.pos.copy(this._predictedPos);
 
     // Yaw por el camino mÃ¡s corto.
     const yawDiff = angleDiff(this.yaw, this._targetYaw);
@@ -298,6 +343,9 @@ export class RemoteAvatar {
     this.crouchAmount = lerp(this.crouchAmount, this._targetCrouch, 1 - Math.exp(-12 * step));
     this.weaponId = this._targetWeaponId;
     this.onGround = this._targetOnGround;
+    this.reloading = this._targetReloading;
+    this.jumpState = this._targetJumpState;
+    this._shootTimer = Math.max(0, this._shootTimer - step);
 
     const moved = Math.hypot(this.pos.x - prevX, this.pos.z - prevZ);
     const instantSpeed = step > 0 ? moved / step : 0;
@@ -348,6 +396,10 @@ export class RemoteAvatar {
         yaw: this.yaw,
         weaponId: this.weaponId,
         speed: this._speed,
+        velocity: this._targetVelocity,
+        jumpState: this.jumpState,
+        reloading: this.reloading,
+        shooting: this._shootTimer > 0,
       }, moving);
       const t = this.alive ? 0 : clamp(this._deathTime / DEATH_DURATION, 0, 1);
       this._kenney.root.rotation.x = -t * 1.37;
@@ -370,6 +422,11 @@ export class RemoteAvatar {
     this._hitFlash = 1;
   }
 
+  playShoot(duration = 0.16) {
+    if (this._disposed || !this.alive) return;
+    this._shootTimer = Math.max(this._shootTimer, Math.max(0.06, Number(duration) || 0.16));
+  }
+
   playDeath() {
     if (this._disposed) return;
     this.alive = false;
@@ -383,6 +440,9 @@ export class RemoteAvatar {
     this._targetAlive = true;
     this._deathTime = 0;
     this._hitFlash = 0;
+    this.jumpState = 'ground';
+    this._targetJumpState = 'ground';
+    this._targetVelocity.set(0, 0, 0);
     this._body.rotation.x = 0;
     this._body.position.y = 0;
     if (this._kenney) {

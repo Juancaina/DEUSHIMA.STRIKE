@@ -1,10 +1,10 @@
 /**
- * Online 1v1 end-to-end test: two headless Chromes (host + guest), PeerJS public cloud,
- * lobby with room code, READY, selected-map match, damage, kill, respawn and rematch.
+ * Online end-to-end test: 2 or 4 headless Chromes, PeerJS public cloud, lobby with
+ * room code, READY, selected-map match, replicated drops, damage, rounds and rematch.
  *
  * Must run outside the DSH Windows file/pipe sandbox.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,16 +20,69 @@ const USE_LOCAL_SERVER = !process.env.CS16_BASE_URL;
 const CHROME =
   process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const TEST_MAP = process.env.CS16_E2E_MAP || 'aim_1v1';
-if (!['aim_1v1', 'aim_redline', 'cs_assault'].includes(TEST_MAP))
+const E2E_PLAYER_COUNT = Number(process.env.CS16_E2E_PLAYERS || 2);
+const CDP_COMMAND_TIMEOUT_MS = Number(
+  process.env.CS16_E2E_CDP_TIMEOUT_MS || (E2E_PLAYER_COUNT === 4 ? 30000 : 20000),
+);
+if (!['aim_1v1', 'aim_redline', 'aim_forge', 'cs_assault'].includes(TEST_MAP))
   throw new Error('Invalid CS16_E2E_MAP: ' + TEST_MAP);
+if (![2, 4].includes(E2E_PLAYER_COUNT))
+  throw new Error('CS16_E2E_PLAYERS must be 2 or 4');
 
 const errors = [];
 const serverProcesses = [];
 const chomes = [];
 let server;
+let browserControl = null;
+let browserPort = null;
 
 function log(...args) {
   console.log(...args);
+}
+
+function isKnownOptionalGoldSrc404(url) {
+  let pathname = '';
+  try {
+    pathname = new URL(url, TARGET_URL).pathname;
+  } catch {
+    return false;
+  }
+  return (
+    pathname === '/assets/cs16/ui/hud.json' ||
+    pathname.startsWith('/assets/cs16/ui/hud/') ||
+    pathname.startsWith('/assets/cs16/models/') ||
+    pathname.startsWith('/assets/cs16/sound/') ||
+    pathname.startsWith('/assets/cs16/textures/wad/')
+  );
+}
+
+function isKnownOptionalConsoleError(text) {
+  return /^\[classic\] falta assets\/cs16\/ui\/hud\.json\b/.test(String(text || ''));
+}
+
+function assertOptionalGoldSrc404Policy() {
+  const optional = [
+    '/assets/cs16/ui/hud.json',
+    '/assets/cs16/ui/hud/640_pain.png',
+    '/assets/cs16/models/v_m4a1.json',
+    '/assets/cs16/sound/weapons/m4a1-1.wav',
+    '/assets/cs16/textures/wad/cs_dust/SandRoad.png',
+  ];
+  for (const url of optional) {
+    if (!isKnownOptionalGoldSrc404(url)) {
+      throw new Error('Optional GoldSrc 404 policy missed: ' + url);
+    }
+  }
+  const required = [
+    '/assets/cs16/ui/menu.png',
+    '/assets/maps/aim_1v1.json',
+    '/src/game.js',
+  ];
+  for (const url of required) {
+    if (isKnownOptionalGoldSrc404(url)) {
+      throw new Error('Optional GoldSrc 404 policy is too broad: ' + url);
+    }
+  }
 }
 
 async function waitForHealth(timeoutMs = 15000) {
@@ -68,8 +121,9 @@ class CDP {
         return;
       }
       if (msg.id && this.pending.has(msg.id)) {
-        const { resolve, reject } = this.pending.get(msg.id);
+        const { resolve, reject, timer } = this.pending.get(msg.id);
         this.pending.delete(msg.id);
+        clearTimeout(timer);
         if (msg.error) reject(new Error(`${msg.error.message} (${msg.error.code})`));
         else resolve(msg.result);
         return;
@@ -78,17 +132,23 @@ class CDP {
     });
   }
 
-  send(method, params = {}, timeoutMs = 20000) {
+  send(method, params = {}, timeoutMs = CDP_COMMAND_TIMEOUT_MS) {
     const id = ++this.id;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify({ id, method, params }));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id);
           reject(new Error(`CDP timeout: ${method}`));
         }
       }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      try {
+        this.ws.send(JSON.stringify({ id, method, params }));
+      } catch (err) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(err);
+      }
     });
   }
 
@@ -97,13 +157,13 @@ class CDP {
     this.handlers.get(method).push(cb);
   }
 
-  async eval(expression) {
+  async eval(expression, timeoutMs = E2E_PLAYER_COUNT === 4 ? 60000 : 20000) {
     const res = await this.send('Runtime.evaluate', {
       expression,
       awaitPromise: true,
       returnByValue: true,
       userGesture: true,
-    });
+    }, timeoutMs);
     if (res.exceptionDetails) {
       throw new Error(
         'Evaluation failed: ' +
@@ -174,7 +234,7 @@ class CDP {
   }
 }
 
-async function findChromePort(profile, timeoutMs = 20000) {
+async function findChromePort(profile, timeoutMs = 40000) {
   const portFile = path.join(profile, 'DevToolsActivePort');
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -191,8 +251,9 @@ async function findChromePort(profile, timeoutMs = 20000) {
   throw new Error('Chrome DevToolsActivePort not found: ' + profile);
 }
 
-async function launchPage(name) {
-  const profile = path.join(root, '.tmp', `online-${name}-${process.pid}`);
+async function ensureHarnessBrowser() {
+  if (browserControl && browserPort) return { control: browserControl, port: browserPort };
+  const profile = path.join(root, '.tmp', `online-browser-${process.pid}`);
   fs.mkdirSync(profile, { recursive: true });
   const chrome = spawn(
     CHROME,
@@ -206,6 +267,9 @@ async function launchPage(name) {
       '--no-first-run',
       '--no-default-browser-check',
       '--autoplay-policy=no-user-gesture-required',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
       '--window-size=1440,810',
       `--user-data-dir=${profile}`,
       '--remote-debugging-port=0',
@@ -214,20 +278,46 @@ async function launchPage(name) {
     { stdio: 'ignore' },
   );
   chomes.push(chrome);
-  const port = await findChromePort(profile);
+  browserPort = await findChromePort(profile);
+  const version = await (await fetch(`http://127.0.0.1:${browserPort}/json/version`)).json();
+  if (!version.webSocketDebuggerUrl) throw new Error('Chrome browser CDP endpoint missing');
+  browserControl = new CDP(version.webSocketDebuggerUrl);
+  await browserControl.connect();
+  return { control: browserControl, port: browserPort };
+}
+
+async function launchPage(name) {
+  const { control, port } = await ensureHarnessBrowser();
+  const context = await control.send('Target.createBrowserContext', {}, 60000);
+  const created = await control.send('Target.createTarget', {
+    url: 'about:blank',
+    browserContextId: context.browserContextId,
+    background: true,
+  }, 90000);
   let tab;
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 80; i++) {
     const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-    tab = list.find((t) => t.type === 'page');
+    tab = list.find((t) => t.type === 'page' && t.id === created.targetId);
     if (tab) break;
     await new Promise((r) => setTimeout(r, 150));
   }
   if (!tab) throw new Error('No page target for ' + name);
   const cdp = new CDP(tab.webSocketDebuggerUrl);
   await cdp.connect();
+  cdp.targetId = created.targetId;
+  cdp.browserContextId = context.browserContextId;
   await cdp.send('Page.enable');
   await cdp.send('Runtime.enable');
   await cdp.send('Log.enable');
+  await cdp.send('Network.enable');
+  if (E2E_PLAYER_COUNT === 4) {
+    // Four WebGL clients are already enough load for the networking test. Use
+    // the production public-build flag so optional extracted GoldSrc HUD/WAD/
+    // viewmodel assets do not consume CPU and I/O on every headless client.
+    await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: 'globalThis.__DEUSHIMA_PUBLIC__ = true;',
+    });
+  }
   cdp.on('Runtime.exceptionThrown', (p) => {
     const text = p.exceptionDetails?.exception?.description || p.exceptionDetails?.text;
     errors.push(`[${name}] ${text}`);
@@ -236,6 +326,10 @@ async function launchPage(name) {
   cdp.on('Runtime.consoleAPICalled', (p) => {
     const text = (p.args || []).map((a) => a.value ?? a.description ?? '').join(' ');
     if (p.type === 'error') {
+      if (isKnownOptionalConsoleError(text)) {
+        log(`  [${name} optional GoldSrc]`, text);
+        return;
+      }
       errors.push(`[${name}] console.error: ${text}`);
       log(`  [${name} console.error]`, text);
     } else if (/error|failed|closed/i.test(text)) {
@@ -244,10 +338,28 @@ async function launchPage(name) {
   });
   cdp.on('Log.entryAdded', (p) => {
     const t = p.entry;
-    if (t.level === 'error' && !/favicon/i.test(t.text)) {
+    // Chromium's Log domain omits the request URL for resource failures. The
+    // Network domain below records the same failure with URL + status, so skip
+    // only that duplicate generic entry here.
+    if (t.source === 'network' && /Failed to load resource/i.test(t.text)) return;
+    if (t.level === 'error') {
       errors.push(`[${name}] ${t.source}: ${t.text}`);
       log(`  [${name} log]`, t.level, t.text);
     }
+  });
+  cdp.on('Network.responseReceived', (p) => {
+    const status = Number(p.response?.status);
+    if (!Number.isFinite(status) || status < 400) return;
+    const url = p.response?.url || '';
+    let pathname = url;
+    try { pathname = new URL(url).pathname; } catch { /* keep raw URL */ }
+    if (status === 404 && isKnownOptionalGoldSrc404(url)) {
+      log(`  [${name} optional GoldSrc 404]`, pathname);
+      return;
+    }
+    if (status === 404 && pathname === '/favicon.ico') return;
+    errors.push(`[${name}] network ${status}: ${url}`);
+    log(`  [${name} network]`, status, url);
   });
   await cdp.send('Page.navigate', { url: TARGET_URL });
   await cdp.waitFor(`!!window.__CS16__`, 60000);
@@ -258,7 +370,29 @@ async function launchPage(name) {
   return cdp;
 }
 
+async function closePage(cdp) {
+  if (!cdp) return;
+  try {
+    if (browserControl && cdp.targetId) {
+      await browserControl.send('Target.closeTarget', { targetId: cdp.targetId });
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (browserControl && cdp.browserContextId) {
+      await browserControl.send('Target.disposeBrowserContext', {
+        browserContextId: cdp.browserContextId,
+      });
+    }
+  } catch {
+    /* ignore */
+  }
+  try { cdp.ws?.close(); } catch { /* ignore */ }
+}
+
 async function main() {
+  assertOptionalGoldSrc404Policy();
   log('Starting server...');
   if (USE_LOCAL_SERVER) {
     server = spawn(process.execPath, ['server.mjs'], {
@@ -268,21 +402,30 @@ async function main() {
     });
     serverProcesses.push(server);
     await waitForHealth();
+    // A stale harness server on the same port can make /__health succeed even
+    // if this child immediately died with EADDRINUSE. Give the child one turn
+    // to report that exit and fail instead of testing against the wrong run.
+    await new Promise((r) => setTimeout(r, 150));
+    if (server.exitCode !== null) {
+      throw new Error(`E2E server exited early with code ${server.exitCode}; port ${PORT} may already be in use`);
+    }
   } else {
     log('Using deployed URL:', TARGET_URL);
   }
 
-  log('Launching two browsers...');
+  log(`Launching ${E2E_PLAYER_COUNT} browsers...`);
   const host = await launchPage('host');
-  const guest = await launchPage('guest');
+  const guests = [];
+  for (let i = 1; i < E2E_PLAYER_COUNT; i++) guests.push(await launchPage(`guest${i}`));
+  const guest = guests[0];
+  const clients = [host, ...guests];
 
-  // Clean old localStorage names is fine. Open the online home in both.
-  await host.eval(`window.__CS16__.openOnlineHome(); true`);
-  await guest.eval(`window.__CS16__.openOnlineHome(); true`);
-  await host.waitFor(`!!document.querySelector('[data-view="home"]:not(.online-hidden)')`, 12000);
-  await guest.waitFor(`!!document.querySelector('[data-view="home"]:not(.online-hidden)')`, 12000);
-  await host.waitFor(`getComputedStyle(document.getElementById('classic-menu')).opacity === '0'`, 8000);
-  await guest.waitFor(`getComputedStyle(document.getElementById('classic-menu')).opacity === '0'`, 8000);
+  // Clean old localStorage names is fine. Open the online home in every client.
+  for (const client of clients) await client.eval(`window.__CS16__.openOnlineHome(); true`);
+  for (const client of clients) {
+    await client.waitFor(`!!document.querySelector('[data-view="home"]:not(.online-hidden)')`, 12000);
+    await client.waitFor(`getComputedStyle(document.getElementById('classic-menu')).opacity === '0'`, 8000);
+  }
 
   await host.fill('[data-online-ref="nameInput"]', 'HostE2E');
   await host.click('[data-online-action="create"]');
@@ -293,52 +436,70 @@ async function main() {
   const code = await host.eval(`window.__CS16__.onlineSession.code`);
   log('Room code:', code);
 
-  await guest.fill('[data-online-ref="nameInputJoin"]', 'GuestE2E');
-  await guest.fill('[data-online-ref="codeInput"]', code);
-  await guest.click('[data-online-action="join"]');
-  try {
-    await guest.waitFor(
-      `!!window.__CS16__.onlineSession && window.__CS16__.onlineSession.role === 'guest' && !!window.__CS16__.onlineSession.connected`,
-      40000,
-    );
-  } catch (err) {
-    const dbg = await guest.eval(`(() => {
-      const g = window.__CS16__;
-      const s = g.onlineSession;
-      return {
-        screen: g.onlineUI && g.onlineUI._screen,
-        error: document.querySelector('[data-view="error"]:not(.online-hidden)')?.innerText?.slice(0,500),
-        status: document.querySelector('[data-view="home"]:not(.online-hidden) .online-status')?.innerText,
-        session: s ? {role:s.role, code:s.code, connected:s.connected, closed:s.closed, started:s.started, status:s._lastStatus} : null,
-        codeInput: document.querySelector('[data-online-ref="codeInput"]')?.value,
-        nameInput: document.querySelector('[data-online-ref="nameInputJoin"]')?.value,
-      };
+  if (E2E_PLAYER_COUNT === 4) {
+    await host.waitFor(`!!document.querySelector('[data-view="host"]:not(.online-hidden)')`, 12000);
+    await host.eval(`(() => {
+      const select = document.querySelector('[data-online-ref="hostMaxPlayersSelect"]');
+      if (!select) throw new Error('host maxPlayers selector missing');
+      select.value = '4';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
     })()`);
-    const hostDbg = await host.eval(`(() => {
-      const g = window.__CS16__; const s = g.onlineSession;
-      return s ? {role:s.role, code:s.code, connected:s.connected, closed:s.closed, started:s.started, status:s._lastStatus, lobby:s.lobby} : null;
-    })()`);
-    log('GUEST DEBUG:', JSON.stringify(dbg, null, 2));
-    log('HOST DEBUG:', JSON.stringify(hostDbg, null, 2));
-    await guest.screenshot('25-online-join-failure.png');
-    throw err;
+    await host.waitFor(`window.__CS16__.onlineSession.lobby?.maxPlayers === 4`, 10000);
+  }
+
+  for (let i = 0; i < guests.length; i++) {
+    const client = guests[i];
+    await client.fill('[data-online-ref="nameInputJoin"]', `Guest${i + 1}E2E`);
+    await client.fill('[data-online-ref="codeInput"]', code);
+    await client.click('[data-online-action="join"]');
+    try {
+      await client.waitFor(
+        `!!window.__CS16__.onlineSession && window.__CS16__.onlineSession.role === 'guest' && !!window.__CS16__.onlineSession.connected`,
+        40000,
+      );
+    } catch (err) {
+      const dbg = await client.eval(`(() => {
+        const g = window.__CS16__;
+        const s = g.onlineSession;
+        return {
+          screen: g.onlineUI && g.onlineUI._screen,
+          error: document.querySelector('[data-view="error"]:not(.online-hidden)')?.innerText?.slice(0,500),
+          status: document.querySelector('[data-view="home"]:not(.online-hidden) .online-status')?.innerText,
+          session: s ? {role:s.role, code:s.code, connected:s.connected, closed:s.closed, started:s.started, status:s._lastStatus} : null,
+          codeInput: document.querySelector('[data-online-ref="codeInput"]')?.value,
+          nameInput: document.querySelector('[data-online-ref="nameInputJoin"]')?.value,
+        };
+      })()`);
+      const hostDbg = await host.eval(`(() => {
+        const g = window.__CS16__; const s = g.onlineSession;
+        return s ? {role:s.role, code:s.code, connected:s.connected, closed:s.closed, started:s.started, status:s._lastStatus, lobby:s.lobby} : null;
+      })()`);
+      log(`GUEST${i + 1} DEBUG:`, JSON.stringify(dbg, null, 2));
+      log('HOST DEBUG:', JSON.stringify(hostDbg, null, 2));
+      await client.screenshot(`25-online-join-failure-${i + 1}.png`);
+      throw err;
+    }
   }
   await host.waitFor(
-    `!!(window.__CS16__.onlineSession.lobby && window.__CS16__.onlineSession.lobby.guest)`,
+    `window.__CS16__.onlineSession.lobby?.players?.length === ${E2E_PLAYER_COUNT}`,
     25000,
   );
-  log('Lobby connected');
-  await host.waitFor(`!!document.querySelector('[data-view="lobby"]:not(.online-hidden)')`, 12000);
-  await guest.waitFor(`!!document.querySelector('[data-view="lobby"]:not(.online-hidden)')`, 12000);
-  const guestSelectDisabled = await guest.eval(`document.querySelector('[data-online-ref="mapSelect"]')?.disabled`);
-  if (!guestSelectDisabled) throw new Error('Guest must not control the map selector');
+  log(`Lobby connected (${E2E_PLAYER_COUNT} players)`);
+  for (const client of clients)
+    await client.waitFor(`!!document.querySelector('[data-view="lobby"]:not(.online-hidden)')`, 12000);
+  for (const client of guests) {
+    const guestSelectDisabled = await client.eval(`document.querySelector('[data-online-ref="mapSelect"]')?.disabled`);
+    if (!guestSelectDisabled) throw new Error('Guest must not control the map selector');
+  }
   await host.eval(`(() => {
     const select = document.querySelector('[data-online-ref="mapSelect"]');
     select.value = ${JSON.stringify(TEST_MAP)};
     select.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
   })()`);
-  await guest.waitFor(`window.__CS16__.onlineSession.lobby.map === ${JSON.stringify(TEST_MAP)}`, 10000);
+  for (const client of guests)
+    await client.waitFor(`window.__CS16__.onlineSession.lobby.map === ${JSON.stringify(TEST_MAP)}`, 10000);
   // A late host map change must revoke READY on both peers before starting.
   await host.click('[data-online-action="ready"]');
   await host.waitFor(`window.__CS16__.onlineSession.lobby.host.ready === true`, 10000);
@@ -350,7 +511,8 @@ async function main() {
     return true;
   })()`);
   await host.waitFor(`window.__CS16__.onlineSession.lobby.host.ready === false`, 10000);
-  await guest.waitFor(`window.__CS16__.onlineSession.lobby.map === ${JSON.stringify(alternateMap)}`, 10000);
+  for (const client of guests)
+    await client.waitFor(`window.__CS16__.onlineSession.lobby.map === ${JSON.stringify(alternateMap)}`, 10000);
   await host.eval(`(() => {
     const select = document.querySelector('[data-online-ref="mapSelect"]');
     select.value = ${JSON.stringify(TEST_MAP)};
@@ -358,49 +520,125 @@ async function main() {
     return true;
   })()`);
   await host.waitFor(`window.__CS16__.onlineSession.lobby.map === ${JSON.stringify(TEST_MAP)}`, 10000);
-  await guest.waitFor(`window.__CS16__.onlineSession.lobby.map === ${JSON.stringify(TEST_MAP)}`, 10000);
+  for (const client of guests)
+    await client.waitFor(`window.__CS16__.onlineSession.lobby.map === ${JSON.stringify(TEST_MAP)}`, 10000);
   await host.screenshot('20-online-host-lobby.png');
   await guest.screenshot('21-online-guest-lobby.png');
 
-  // READY on both.
+  // READY on every connected player.
   await host.click('[data-online-action="ready"]');
   await host.waitFor(`window.__CS16__.onlineSession.lobby.host.ready === true`, 10000);
-  await guest.click('[data-online-action="ready"]');
-  await host.waitFor(`window.__CS16__.state === 'playing'`, 50000);
-  await guest.waitFor(`window.__CS16__.state === 'playing'`, 50000);
-  await host.waitFor(`window.__CS16__.map && window.__CS16__.map.id === ${JSON.stringify(TEST_MAP)}`, 30000);
-  await guest.waitFor(`window.__CS16__.map && window.__CS16__.map.id === ${JSON.stringify(TEST_MAP)}`, 30000);
-  await host.waitFor(`!!window.__CS16__.online`, 15000);
-  await guest.waitFor(`!!window.__CS16__.online`, 15000);
-  for (const [peer, team] of [[host, 'CT'], [guest, 'T']]) {
+  for (const client of guests) await client.click('[data-online-action="ready"]');
+  for (const client of clients) await client.waitFor(`window.__CS16__.state === 'playing'`, 50000);
+  for (const client of clients)
+    await client.waitFor(`window.__CS16__.map && window.__CS16__.map.id === ${JSON.stringify(TEST_MAP)}`, 30000);
+  for (const client of clients) await client.waitFor(`!!window.__CS16__.online`, 15000);
+  for (const peer of clients) {
     const spawnCheck = await peer.eval(`(() => {
       const g = window.__CS16__;
-      const team = ${JSON.stringify(team)};
-      const roll = g.online.startPayload.spawnRolls[team];
+      const localId = g.onlineSession.localPlayerId;
+      const me = g.online.startPayload.players.find((p) => p.id === localId);
+      const team = me?.team || g.player.team;
+      const rolls = g.online.startPayload.spawnRolls || {};
+      const roll = rolls[localId] ?? rolls.byPlayerId?.[localId] ?? rolls[team];
       const expected = g.map.spawns[team][Math.floor(roll * g.map.spawns[team].length)];
-      return {team:g.player.team, expected, actual:{x:g.player.pos.x,z:g.player.pos.z}};
+      return {
+        localId,
+        team:g.player.team,
+        expected,
+        actual:{x:g.player.pos.x,z:g.player.pos.z},
+        roster:g.online.getRoster().length,
+        remotes:g.online.getRemoteEntities().length,
+        alive:g.getAliveCounts(),
+      };
     })()`);
-    if (spawnCheck.team !== team || Math.abs(spawnCheck.actual.x - spawnCheck.expected.x) > .01 ||
+    if (!spawnCheck.expected || Math.abs(spawnCheck.actual.x - spawnCheck.expected.x) > .01 ||
       Math.abs(spawnCheck.actual.z - spawnCheck.expected.z) > .01)
       throw new Error('Wrong initial spawn: ' + JSON.stringify(spawnCheck));
+    if (spawnCheck.roster !== E2E_PLAYER_COUNT || spawnCheck.remotes !== E2E_PLAYER_COUNT - 1)
+      throw new Error('Wrong online roster replication: ' + JSON.stringify(spawnCheck));
+    const perTeam = E2E_PLAYER_COUNT / 2;
+    if (spawnCheck.alive.CT !== perTeam || spawnCheck.alive.T !== perTeam)
+      throw new Error('Wrong alive team counts: ' + JSON.stringify(spawnCheck));
   }
-  log('Both in', TEST_MAP);
+  log(`All ${E2E_PLAYER_COUNT} clients in`, TEST_MAP);
 
   // Regression: remote pose/equipment must replicate, not just position/yaw.
   // Send one real protocol state explicitly; headless Chrome cannot retain
   // pointer-lock reliably enough to exercise held Ctrl through Player.update().
   await host.waitFor("window.__CS16__.online.phase === 'live'", 15000);
-  await host.eval("(() => { const g=window.__CS16__; const prev={c:g.player.crouching,o:g.player.onGround,s:g.player.speed,w:g.weapons.currentId}; g.online._stateAccum=-999; g.player.crouching=true; g.player.onGround=false; g.player.speed=4.2; g.weapons.currentId='awp'; g.online._sendState(); g.player.crouching=prev.c; g.player.onGround=prev.o; g.player.speed=prev.s; g.weapons.currentId=prev.w; return true; })()");
-  await guest.waitFor("(() => { const a=window.__CS16__.online?.avatar; return !!a && a.crouchAmount > 0.45 && a.weaponId === 'awp' && a.onGround === false; })()", 10000);
-  await guest.waitFor("(() => { const c=window.__CS16__.online?.avatar?._kenney; return !!c && c.state === 'duck' && c.gunMeshes?.Sniper?.visible === true; })()", 10000);
-  const replicatedPose = await guest.eval("(() => { const a=window.__CS16__.online.avatar; const c=a._kenney; return { crouch:a.crouchAmount, weaponId:a.weaponId, onGround:a.onGround, anim:c?.state || null, sniperVisible:!!c?.gunMeshes?.Sniper?.visible }; })()");
-  if (!(replicatedPose.crouch > 0.45) || replicatedPose.weaponId !== 'awp' || replicatedPose.onGround !== false ||
-      replicatedPose.anim !== 'duck' || replicatedPose.sniperVisible !== true) {
+  await host.eval("(() => { const g=window.__CS16__; const prev={c:g.player.crouching,o:g.player.onGround,s:g.player.speed,w:g.weapons.currentId}; g.online._stateAccum=-999; g.player.crouching=true; g.player.onGround=false; g.player.speed=4.2; g.weapons.currentId='deagle'; g.online._sendState(); g.player.crouching=prev.c; g.player.onGround=prev.o; g.player.speed=prev.s; g.weapons.currentId=prev.w; return true; })()");
+  await guest.waitFor("(() => { const o=window.__CS16__.online; const a=o?.avatars?.get?.(o.startPayload.hostId); return !!a && a.crouchAmount > 0.45 && a.weaponId === 'deagle' && a.onGround === false; })()", 10000);
+  await guest.waitFor("(() => { const o=window.__CS16__.online; const c=o?.avatars?.get?.(o.startPayload.hostId)?._kenney; return !!c && c.state === 'duck' && c.gunMeshes?.Pistol?.visible === true; })()", 10000);
+  const replicatedPose = await guest.eval("(() => { const o=window.__CS16__.online; const a=o.avatars.get(o.startPayload.hostId); const c=a._kenney; return { crouch:a.crouchAmount, weaponId:a.weaponId, onGround:a.onGround, anim:c?.state || null, pistolVisible:!!c?.gunMeshes?.Pistol?.visible }; })()");
+  if (!(replicatedPose.crouch > 0.45) || replicatedPose.weaponId !== 'deagle' || replicatedPose.onGround !== false ||
+      replicatedPose.anim !== 'duck' || replicatedPose.pistolVisible !== true) {
     throw new Error('Remote pose/equipment replication failed: ' + JSON.stringify(replicatedPose));
   }
   log('Remote pose/equipment:', replicatedPose);
   await host.eval("(() => { window.__CS16__.online._stateAccum=1; return true; })()");
   await new Promise((r) => setTimeout(r, 2200));
+
+  if (E2E_PLAYER_COUNT === 2) {
+    // V3 regression: normal 1v1 boots directly into CS16_1V1_AUTOBHOP.
+    // Hold Space through ten real physics landings and require the remote peer
+    // to observe an airborne state as well.
+    const movementStart = await host.eval("(() => { const g=window.__CS16__; g.input.locked=true; for (const k of ['KeyW','KeyA','KeyS','KeyD']) g.input.keys.delete(k); g.player.vel.x=0; g.player.vel.z=0; g.player._jumpCount=0; const debug=g.player.getMovementDebugState(); g.input.keys.add('Space'); return debug; })()");
+    if (
+      movementStart?.preset !== 'CS16_1V1_AUTOBHOP' ||
+      movementStart?.autoBhopEnabled !== true ||
+      Math.abs(Number(movementStart?.fixedStep) - 0.01) > 1e-9
+    ) {
+      throw new Error('1v1 did not load V3 autobhop preset: ' + JSON.stringify(movementStart));
+    }
+    await guest.waitFor("(() => { const o=window.__CS16__.online; const a=o?.avatars?.get?.(o.startPayload.hostId); return !!a && (a.jumpState === 'rise' || a.jumpState === 'fall') && a._stateTick > 0; })()", 8000);
+    await host.waitFor("window.__CS16__.player._jumpCount >= 10", 12000);
+    const movementEnd = await host.eval("(() => { const g=window.__CS16__; g.input.keys.delete('Space'); return g.player.getMovementDebugState(); })()");
+    if (movementEnd.jumpCount < 10 || movementEnd.autoBhopEnabled !== true)
+      throw new Error('held-Space online autobhop failed: ' + JSON.stringify(movementEnd));
+    log('Online autobhop V3:', {
+      preset: movementEnd.preset,
+      jumps: movementEnd.jumpCount,
+      tick: movementEnd.tick,
+    });
+  }
+
+  // Real G-drop path: host authority removes the gun, every client sees one
+  // network drop, then pickup removes it everywhere and preserves exact ammo.
+  const dropInfo = await host.eval(`(() => {
+    const g = window.__CS16__;
+    g.weapons.setDroppedWeaponPickupEnabled(false);
+    const entry = g.weapons.inventory.primary;
+    if (!entry || entry.id !== 'm4a1') throw new Error('host primary missing before drop test');
+    entry.magazine = 17;
+    entry.reserve = 53;
+    g.online._syncAuthorityFromLocal(Date.now());
+    if (!g.weapons._dropCurrent()) throw new Error('G drop request rejected');
+    const drop = [...g.online.drops.values()][0];
+    return drop ? { id:drop.id, magazine:drop.entry.magazine, reserve:drop.entry.reserve } : null;
+  })()`);
+  if (!dropInfo?.id || dropInfo.magazine !== 17 || dropInfo.reserve !== 53)
+    throw new Error('Host drop ammo mismatch: ' + JSON.stringify(dropInfo));
+  for (const client of clients)
+    await client.waitFor(`window.__CS16__.online.drops.size === 1 && window.__CS16__.weapons.dropped.length === 1`, 10000);
+  for (const client of guests) {
+    const remoteDrop = await client.eval(`(() => { const d=[...window.__CS16__.online.drops.values()][0]; return d ? {id:d.id,magazine:d.entry.magazine,reserve:d.entry.reserve} : null; })()`);
+    if (remoteDrop?.id !== dropInfo.id || remoteDrop.magazine !== 17 || remoteDrop.reserve !== 53)
+      throw new Error('Replicated drop mismatch: ' + JSON.stringify(remoteDrop));
+  }
+  await new Promise((r) => setTimeout(r, 700));
+  await host.eval(`(() => {
+    const g = window.__CS16__;
+    g.weapons.setDroppedWeaponPickupEnabled(true);
+    if (!g.online.requestWeaponPickup(${JSON.stringify(dropInfo.id)})) return false;
+    return true;
+  })()`);
+  for (const client of clients)
+    await client.waitFor(`window.__CS16__.online.drops.size === 0 && window.__CS16__.weapons.dropped.length === 0`, 10000);
+  const pickedAmmo = await host.eval(`(() => { const e=window.__CS16__.weapons.inventory.primary; return e ? {id:e.id,magazine:e.magazine,reserve:e.reserve} : null; })()`);
+  if (pickedAmmo?.id !== 'm4a1' || pickedAmmo.magazine !== 17 || pickedAmmo.reserve !== 53)
+    throw new Error('Pickup ammo mismatch: ' + JSON.stringify(pickedAmmo));
+
   await host.screenshot('22-online-host-match.png');
   await guest.screenshot('23-online-guest-match.png');
 
@@ -420,7 +658,8 @@ async function main() {
   const beforeGuest = await guest.eval(`({health:window.__CS16__.player.health, alive:window.__CS16__.player.alive})`);
   await host.eval(`(() => {
     const g = window.__CS16__;
-    const remote = g.online.getRemoteEntity();
+    const remote = g.online.getRemoteEntities().find((entity) => entity.team !== g.player.team);
+    if (!remote) throw new Error('enemy remote missing');
     const p = g.player.pos;
     g.online.notifyLocalShot({
       origin: {x:p.x, y:p.y + 1.62, z:p.z},
@@ -435,41 +674,99 @@ async function main() {
   const hostScore = await host.eval(`({scores:window.__CS16__.online.scores, phase:window.__CS16__.online.phase})`);
   log('Damage test:', { beforeGuest, afterGuest, hostScore });
 
+  if (E2E_PLAYER_COUNT === 4) {
+    // One kill must not end a 2v2 round. Eliminate the remaining T to exercise
+    // the team-round transition before checking the next-round respawn.
+    const phaseAfterFirstKill = await host.eval(`window.__CS16__.online.phase`);
+    if (phaseAfterFirstKill !== 'live')
+      throw new Error('2v2 round ended after only one opponent died: ' + phaseAfterFirstKill);
+    await host.eval(`(() => {
+      const o = window.__CS16__.online;
+      const victim = [...o.players.values()].find((p) => p.team === 'T' && p.alive);
+      if (!victim) throw new Error('remaining T missing');
+      o._hostKill(o.localId, victim.id, 'm4a1', false);
+      return true;
+    })()`);
+  }
+
   await new Promise((r) => setTimeout(r, 5200));
   const respawnedGuest = await guest.eval(`({health:window.__CS16__.player.health, alive:window.__CS16__.player.alive, pos:{x:window.__CS16__.player.pos.x,z:window.__CS16__.player.pos.z}})`);
   log('Guest respawn:', respawnedGuest);
 
-  // Force the score to 10 to verify the match-end overlay on both clients.
+  // Put CT on match point, then finish through the real team-round path.
   await host.eval(`(() => {
     const o = window.__CS16__.online;
-    o.scores.host = o.targetKills;
-    o._checkMatchEnd();
+    o.teamScores.CT = o.targetRounds - 1;
+    o.phase = 'live';
+    const victims = [...o.players.values()].filter((p) => p.team !== o.myTeam && p.connected !== false);
+    if (!victims.length) throw new Error('opponents missing at match point');
+    for (const victim of victims) {
+      victim.alive = true;
+      victim.health = 100;
+      o.avatars.get(victim.id)?.respawn?.();
+    }
+    for (const victim of victims) o._hostKill(o.localId, victim.id, 'm4a1', false);
     return true;
   })()`);
   await host.waitFor(`!!document.querySelector('[data-view="matchEnd"]:not(.online-hidden)')`, 15000);
-  await guest.waitFor(`!!document.querySelector('[data-view="matchEnd"]:not(.online-hidden)')`, 15000);
-  const endInfo = await host.eval(`({phase:window.__CS16__.online.phase, hostScore:window.__CS16__.online.scores.host, guestScore:window.__CS16__.online.scores.guest, endText:document.querySelector('[data-view="matchEnd"]:not(.online-hidden)')?.innerText?.slice(0,300)})`);
+  for (const client of guests)
+    await client.waitFor(`!!document.querySelector('[data-view="matchEnd"]:not(.online-hidden)')`, 15000);
+  const endInfo = await host.eval(`({phase:window.__CS16__.online.phase, scoreCT:window.__CS16__.online.teamScores.CT, scoreT:window.__CS16__.online.teamScores.T, endText:document.querySelector('[data-view="matchEnd"]:not(.online-hidden)')?.innerText?.slice(0,300)})`);
   log('Match end:', JSON.stringify(endInfo));
   await host.screenshot('25-online-match-end.png');
 
-  // Rematch: host resets lobby, both should leave the match and show the lobby.
+  // Rematch: host resets lobby, every client should leave the match and keep the room.
   await host.eval(`window.__CS16__.online.requestRematch(); true`);
-  await host.waitFor(`!!document.querySelector('[data-view="lobby"]:not(.online-hidden)')`, 30000);
-  await guest.waitFor(`!!document.querySelector('[data-view="lobby"]:not(.online-hidden)')`, 30000);
-  const rematchInfo = await host.eval(`({state:window.__CS16__.state, online:!!window.__CS16__.online, screen:window.__CS16__.onlineUI._screen, role:window.__CS16__.onlineSession.role, code:window.__CS16__.onlineSession.code})`);
-  log('Rematch/lobby:', JSON.stringify(rematchInfo));
+  for (const client of clients)
+    await client.waitFor(`!!document.querySelector('[data-view="lobby"]:not(.online-hidden)')`, 30000);
+  for (let i = 0; i < clients.length; i++) {
+    const rematchInfo = await clients[i].eval(`({state:window.__CS16__.state, online:!!window.__CS16__.online, screen:window.__CS16__.onlineUI._screen, role:window.__CS16__.onlineSession?.role, code:window.__CS16__.onlineSession?.code})`);
+    const expectedRole = i === 0 ? 'host' : 'guest';
+    if (rematchInfo.state !== 'menu' || rematchInfo.online || rematchInfo.screen !== 'lobby' ||
+        rematchInfo.role !== expectedRole || rematchInfo.code !== code) {
+      throw new Error(`Bad rematch state for client ${i}: ` + JSON.stringify(rematchInfo));
+    }
+    log(`Rematch/lobby client ${i}:`, JSON.stringify(rematchInfo));
+  }
   await host.screenshot('26-online-rematch-lobby.png');
 
-  log('Closing guest to test disconnect...');
-  try {
-    guest.ws.close();
-  } catch {
-    /* ignore */
+  if (E2E_PLAYER_COUNT === 2) {
+    log('Closing guest to test disconnect...');
+    const guestId = await guest.eval(`window.__CS16__.onlineSession.localPlayerId`);
+    await guest.eval(`window.__CS16__.onlineSession.close('E2E guest disconnect'); true`);
+    await closePage(guest);
+    await host.waitFor(`(() => {
+      const roster = window.__CS16__.onlineSession?.lobby?.roster;
+      if (!roster) return false;
+      const peer = roster[${JSON.stringify(guestId)}];
+      return !peer || peer.connected === false;
+    })()`, 16000);
+    const afterClose = await host.eval(`(() => {
+      const g = window.__CS16__;
+      const s = g.onlineSession;
+      const peer = s?.lobby?.roster?.[${JSON.stringify(guestId)}];
+      return {
+        state:g.state,
+        online:!!g.online,
+        session:!!s,
+        screen:g.onlineUI?._screen,
+        code:s?.code,
+        peerExists:!!peer,
+        peerConnected:peer?.connected,
+        peerReady:peer?.ready,
+        mainVisible:!document.querySelector('[data-screen="main"]')?.classList.contains('u-hidden'),
+      };
+    })()`);
+    const peerGoneOrDisconnected =
+      afterClose.peerExists === false ||
+      (afterClose.peerConnected === false && afterClose.peerReady === false);
+    if (afterClose.state !== 'menu' || afterClose.online || !afterClose.session ||
+        afterClose.screen !== 'lobby' || afterClose.code !== code ||
+        !peerGoneOrDisconnected) {
+      throw new Error('Bad host state after guest disconnect: ' + JSON.stringify(afterClose));
+    }
+    log('Host after guest close:', afterClose);
   }
-  chomes[1]?.kill();
-  await new Promise((r) => setTimeout(r, 2500));
-  const afterClose = await host.eval(`({state:window.__CS16__.state, online:!!window.__CS16__.online, session:!!window.__CS16__.onlineSession, mainVisible:!document.querySelector('[data-screen="main"]')?.classList.contains('u-hidden')})`);
-  log('Host after guest close:', afterClose);
 
   if (errors.length) {
     log('\nERRORS (' + errors.length + '):');
@@ -481,17 +778,27 @@ async function main() {
 }
 
 async function cleanup() {
-  for (const cdp of []) cdp?.ws?.close();
+  try { browserControl?.ws?.close(); } catch { /* ignore */ }
+  browserControl = null;
+  browserPort = null;
   for (const c of chomes) {
     try {
-      c.kill();
+      if (process.platform === 'win32' && c.pid) {
+        spawnSync('taskkill', ['/PID', String(c.pid), '/T', '/F'], { stdio: 'ignore' });
+      } else {
+        c.kill();
+      }
     } catch {
       /* ignore */
     }
   }
   for (const s of serverProcesses) {
     try {
-      s.kill();
+      if (process.platform === 'win32' && s.pid) {
+        spawnSync('taskkill', ['/PID', String(s.pid), '/T', '/F'], { stdio: 'ignore' });
+      } else {
+        s.kill();
+      }
     } catch {
       /* ignore */
     }

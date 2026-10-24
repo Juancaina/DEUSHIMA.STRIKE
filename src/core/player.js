@@ -1,5 +1,10 @@
 import * as THREE from '../../vendor/three.module.js';
 import { clamp, lerp, expDamp, DEG, distance2D } from './utils.js';
+import {
+  DEFAULT_MATCH_MOVEMENT_PRESET,
+  movementPreset,
+  movementPresetForGame,
+} from './movement-presets.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const _forward = new THREE.Vector3();
@@ -7,12 +12,7 @@ const _right = new THREE.Vector3();
 const _wish = new THREE.Vector3();
 const _eye = new THREE.Vector3();
 
-const GROUND_ACCEL = 10;
-const AIR_ACCEL = 10;
-const AIR_WISH_CAP = 0.76;
-const GROUND_FRICTION = 4;
-const STOP_SPEED = 1.9;
-const JUMP_BUFFER = 0.1;
+const DEFAULT_RUN_SPEED = 6.25; // 250 GoldSrc units/s at ~40 u per world meter.
 
 export class Player {
   constructor(game) {
@@ -65,10 +65,18 @@ export class Player {
     this.hasBomb = false;
     this.teamKills = 0;
     this.speed = 0;
-    this.moveSpeed = 5.6;
+    this.moveSpeed = DEFAULT_RUN_SPEED;
 
     this.spawnProtection = 0;
     this._jumpBuffer = 0;
+    this._jumpHeld = false;
+    this._jumpCount = 0;
+    this._physicsTick = 0;
+    this._physicsAccumulator = 0;
+    this._jumpPressedLatched = false;
+    this._movementPreset = movementPresetForGame(game);
+    this.movementPresetId = this._movementPreset.id || DEFAULT_MATCH_MOVEMENT_PRESET;
+    this.stepHeight = this._movementPreset.stepHeight;
     this._tmp = new THREE.Vector3();
   }
 
@@ -91,6 +99,13 @@ export class Player {
     this.lastDamageTime = -10;
     this.spawnProtection = 1.0;
     this._jumpBuffer = 0;
+    this._jumpHeld = false;
+    this._jumpCount = 0;
+    this._physicsAccumulator = 0;
+    this._jumpPressedLatched = false;
+    this._movementPreset = movementPresetForGame(this.game);
+    this.movementPresetId = this._movementPreset.id || DEFAULT_MATCH_MOVEMENT_PRESET;
+    this.stepHeight = this._movementPreset.stepHeight;
     this.roundKills = 0;
     this.hasBomb = false;
     this.updateCamera(0, true);
@@ -147,22 +162,23 @@ export class Player {
   }
 
   accelerate(wishDir, wishSpeed, accel, dt) {
+    if (wishDir.lengthSq() < 1e-8 || wishSpeed <= 0) return;
     const current = this.vel.x * wishDir.x + this.vel.z * wishDir.z;
     const add = wishSpeed - current;
     if (add <= 0) return;
-    let accelSpeed = Math.min(accel * wishSpeed * dt, add);
+    const accelSpeed = Math.min(accel * wishSpeed * dt, add);
     this.vel.x += wishDir.x * accelSpeed;
     this.vel.z += wishDir.z * accelSpeed;
   }
 
-  applyFriction(dt, friction = GROUND_FRICTION) {
+  applyFriction(dt, friction = this._movementPreset.friction) {
     const speed = Math.hypot(this.vel.x, this.vel.z);
     if (speed < 0.05) {
       this.vel.x = 0;
       this.vel.z = 0;
       return;
     }
-    const control = Math.max(speed, STOP_SPEED);
+    const control = Math.max(speed, this._movementPreset.stopSpeed);
     const drop = control * friction * dt;
     const newSpeed = Math.max(0, speed - drop);
     const scale = newSpeed / speed;
@@ -172,13 +188,44 @@ export class Player {
 
   airAccelerate(wishDir, wishSpeed, dt) {
     if (wishDir.lengthSq() < 1e-8 || wishSpeed <= 0) return;
-    const cappedWish = Math.min(wishSpeed, AIR_WISH_CAP);
+    const preset = this._movementPreset;
+    const cappedWish = Math.min(wishSpeed, preset.airWishCap);
     const current = this.vel.x * wishDir.x + this.vel.z * wishDir.z;
     const add = cappedWish - current;
     if (add <= 0) return;
-    const accelSpeed = Math.min(AIR_ACCEL * wishSpeed * dt, add);
+    const accelSpeed = Math.min(preset.airAccelerate * wishSpeed * dt, add);
     this.vel.x += wishDir.x * accelSpeed;
     this.vel.z += wishDir.z * accelSpeed;
+  }
+
+  setMovementPreset(id) {
+    this._movementPreset = movementPreset(id);
+    this.movementPresetId = this._movementPreset.id;
+    this.stepHeight = this._movementPreset.stepHeight;
+    this._physicsAccumulator = 0;
+    return this._movementPreset;
+  }
+
+  refreshMovementPreset() {
+    const next = movementPresetForGame(this.game);
+    if (next.id !== this.movementPresetId) this.setMovementPreset(next.id);
+    return this._movementPreset;
+  }
+
+  getMovementDebugState() {
+    return {
+      preset: this.movementPresetId,
+      horizontalSpeed: this.getVelocity2D(),
+      verticalSpeed: this.vel.y,
+      grounded: this.onGround,
+      tick: this._physicsTick,
+      wishSpeed: this.moveSpeed,
+      airAcceleration: this._movementPreset.airAccelerate,
+      jumpCount: this._jumpCount,
+      jumpHeld: this._jumpHeld,
+      autoBhopEnabled: !!this._movementPreset.autoBhopEnabled,
+      fixedStep: this._movementPreset.fixedStep,
+    };
   }
 
   wishDirection() {
@@ -190,6 +237,99 @@ export class Player {
     _wish.set(0, 0, 0).addScaledVector(_forward, f).addScaledVector(_right, s);
     if (_wish.lengthSq() > 1) _wish.normalize();
     return _wish;
+  }
+
+  _simulateMovementStep(dt, canMove) {
+    const game = this.game;
+    const input = game.input;
+    const preset = this._movementPreset;
+    this._physicsTick++;
+
+    this.walking = input.isDown('ShiftLeft') || input.isDown('ShiftRight');
+    const wantsCrouch = canMove && (input.isDown('ControlLeft') || input.isDown('ControlRight'));
+    const canStand = wantsCrouch || this.height >= this.standHeight - 0.005
+      ? true
+      : (game.physics?.canFitBody?.(this, this.standHeight) ?? true);
+    this.crouching = wantsCrouch || !canStand;
+
+    const targetHeight = this.crouching ? this.crouchHeight : this.standHeight;
+    this.height = expDamp(this.height, targetHeight, 18, dt);
+    if (Math.abs(this.height - targetHeight) < 0.002) this.height = targetHeight;
+    this.crouchAmount = expDamp(this.crouchAmount, this.crouching ? 1 : 0, 16, dt);
+
+    // Weapon speed is wishspeed/ground acceleration target, never an absolute
+    // clamp on accumulated horizontal bhop velocity.
+    const weaponRunSpeed = clamp(
+      Number(game.weapons?.getMoveSpeed?.() ?? DEFAULT_RUN_SPEED) || DEFAULT_RUN_SPEED,
+      4.6,
+      6.6,
+    );
+    if (this.crouching) this.moveSpeed = weaponRunSpeed * preset.crouchSpeedFactor;
+    else if (this.walking) this.moveSpeed = weaponRunSpeed * preset.walkSpeedFactor;
+    else this.moveSpeed = weaponRunSpeed;
+
+    if (this._jumpPressedLatched) {
+      this._jumpBuffer = preset.jumpBuffer;
+      this._jumpPressedLatched = false;
+    }
+    this._jumpHeld = input.isDown('Space');
+
+    const wish = this.wishDirection();
+    if (canMove) {
+      if (this.onGround) {
+        const autoJump = preset.autoBhopEnabled && preset.jumpWhileHeldOnLanding && this._jumpHeld;
+        if (this._jumpBuffer > 0 || autoJump) {
+          this.vel.y = preset.jumpVelocity;
+          this.onGround = false;
+          this._jumpBuffer = 0;
+          this._jumpCount++;
+          game.audio.play('jump');
+        } else {
+          let friction = preset.friction;
+          const horizontalSpeed = this.getVelocity2D();
+          if (horizontalSpeed > 0.05 && game.physics?.hasGroundBelow) {
+            const ahead = preset.edgeProbeForward / horizontalSpeed;
+            const supported = game.physics.hasGroundBelow(
+              this,
+              this.vel.x * ahead,
+              this.vel.z * ahead,
+              preset.edgeProbeDrop,
+            );
+            if (!supported) friction *= preset.edgeFriction;
+          }
+          this.applyFriction(dt, friction);
+          this.accelerate(wish, this.moveSpeed, preset.accelerate, dt);
+        }
+      } else if (preset.airStrafeEnabled) {
+        this.airAccelerate(wish, this.moveSpeed, dt);
+      }
+    } else if (this.onGround) {
+      this.applyFriction(dt, Math.max(10, preset.friction));
+    }
+
+    this._jumpBuffer = Math.max(0, this._jumpBuffer - dt);
+
+    // GoldSrc applies gravity around movement. Splitting it in half keeps the
+    // integration stable at the fixed tick without changing horizontal bhop.
+    if (!this.onGround || this.vel.y > 0) this.vel.y -= preset.gravity * 0.5 * dt;
+    const maxVelocity = preset.maxVelocity;
+    this.vel.x = clamp(this.vel.x, -maxVelocity, maxVelocity);
+    this.vel.y = clamp(this.vel.y, -maxVelocity, maxVelocity);
+    this.vel.z = clamp(this.vel.z, -maxVelocity, maxVelocity);
+
+    const wasOnGround = this.onGround;
+    const fallSpeed = this.vel.y;
+    game.physics.moveBody(this, dt);
+    if (!this.onGround) this.vel.y -= preset.gravity * 0.5 * dt;
+
+    if (!wasOnGround && this.onGround) {
+      if (fallSpeed < -8.2) {
+        const dmg = Math.min(90, Math.floor((-fallSpeed - 8.2) * 10));
+        if (dmg > 0) this.takeDamage(dmg, null, 'legs', 'fall');
+      }
+      game.audio.play('land', { volume: clamp(fallSpeed / -12, 0.25, 1) });
+      this.addShake(0.08);
+    }
   }
 
   update(dt) {
@@ -205,59 +345,26 @@ export class Player {
     this.damageFlash = Math.max(0, this.damageFlash - dt * 2);
     this.spawnProtection = Math.max(0, this.spawnProtection - dt);
 
-
     const input = game.input;
     const canMove = game.canMove();
-    this.walking = input.isDown('ShiftLeft') || input.isDown('ShiftRight');
-    this.crouching = canMove && (input.isDown('ControlLeft') || input.isDown('ControlRight'));
+    this.refreshMovementPreset();
+    if (input.wasPressed('Space')) this._jumpPressedLatched = true;
+    this._jumpHeld = input.isDown('Space');
 
-    const targetHeight = this.crouching ? this.crouchHeight : this.standHeight;
-    this.height = expDamp(this.height, targetHeight, 18, dt);
-    this.crouchAmount = expDamp(this.crouchAmount, this.crouching ? 1 : 0, 16, dt);
-
-    if (this.crouching) this.moveSpeed = 2.35;
-    else if (this.walking) this.moveSpeed = 3.1;
-    else this.moveSpeed = 5.6;
-
-    if (input.wasPressed('Space')) this._jumpBuffer = JUMP_BUFFER;
-    if (game.settings.autoBhop && input.isDown('Space')) this._jumpBuffer = JUMP_BUFFER;
-
-    const wish = this.wishDirection();
-    if (canMove) {
-      if (this.onGround) {
-        // A jump taken on the landing frame keeps horizontal momentum. This is
-        // the key GoldSrc/Quake behavior that makes timed bunnyhops possible.
-        if (this._jumpBuffer > 0) {
-          this.vel.y = 5.0;
-          this.onGround = false;
-          this._jumpBuffer = 0;
-          game.audio.play('jump');
-        } else {
-          this.applyFriction(dt);
-          this.accelerate(wish, this.moveSpeed, GROUND_ACCEL, dt);
-        }
-      } else {
-        // GoldSrc-style projection cap: total horizontal speed may grow while
-        // only the component along the new wish direction is capped.
-        this.airAccelerate(wish, this.moveSpeed, dt);
-      }
-    } else if (this.onGround) {
-      this.applyFriction(dt, 10);
-    }
-
-    this._jumpBuffer = Math.max(0, this._jumpBuffer - dt);
-    this.vel.y -= 18 * dt;
-
-    const wasOnGround = this.onGround;
-    const fallSpeed = this.vel.y;
-    game.physics.moveBody(this, dt);
-    if (!wasOnGround && this.onGround) {
-      if (fallSpeed < -8.2) {
-        const dmg = Math.min(90, Math.floor((-fallSpeed - 8.2) * 10));
-        if (dmg > 0) this.takeDamage(dmg, null, 'legs', 'fall');
-      }
-      game.audio.play('land', { volume: clamp(fallSpeed / -12, 0.25, 1) });
-      this.addShake(0.08);
+    const preset = this._movementPreset;
+    const frameDt = Math.min(preset.maxFrameCatchup, Math.max(0, Number(dt) || 0));
+    this._physicsAccumulator = Math.min(
+      preset.maxFrameCatchup,
+      this._physicsAccumulator + frameDt,
+    );
+    let steps = 0;
+    while (
+      this._physicsAccumulator + 1e-9 >= preset.fixedStep &&
+      steps < preset.maxPhysicsStepsPerFrame
+    ) {
+      this._simulateMovementStep(preset.fixedStep, canMove);
+      this._physicsAccumulator -= preset.fixedStep;
+      steps++;
     }
 
     this.speed = Math.hypot(this.vel.x, this.vel.z);

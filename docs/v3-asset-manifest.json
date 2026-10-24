@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "accessedAt": "2026-10-24",
+  "policy": "Only exact V3 character assets may replace placeholders, and only after an authorized original download plus independently verifiable redistribution rights. A marketplace/upload license alone is not treated as proof of rights to Valve-derived content.",
+  "targets": [
+    {
+      "team": "T",
+      "targetName": "Leet Krew A",
+      "canonicalUrl": "https://sketchfab.com/3d-models/leet-krew-a-e6742602959246a5ba56f57fd96e1fb6",
+      "sketchfabId": "e6742602959246a5ba56f57fd96e1fb6",
+      "listingCreator": null,
+      "listingDownloadable": null,
+      "listingLicense": null,
+      "originalFormat": null,
+      "originalPackageSha256": null,
+      "underlyingRightsVerified": false,
+      "status": "BLOCKED",
+      "blockers": [
+        "The exact listing metadata and authorized download could not be independently retrieved from the available public access path on 2026-10-24.",
+        "Redistribution rights for any underlying Valve/Counter-Strike character content have not been verified."
+      ]
+    },
+    {
+      "team": "CT",
+      "targetName": "SAS | CS2 Agent Model Blue",
+      "canonicalUrl": "https://sketchfab.com/3d-models/sas-cs2-agent-model-blue-7f18aaccd0ee4694a36646101a12339e",
+      "sketchfabId": "7f18aaccd0ee4694a36646101a12339e",
+      "listingCreator": "gettan (@kill6lucius)",
+      "listingDownloadable": true,
+      "listingLicense": "CC Attribution (CC BY) as displayed by Sketchfab",
+      "listingCredits": "Valve",
+      "listingFormatDescription": "GLB counter-strike model; rigged",
+      "originalFormat": null,
+      "originalPackageSha256": null,
+      "underlyingRightsVerified": false,
+      "status": "BLOCKED",
+      "blockers": [
+        "The listing explicitly credits Valve. The uploader-selected CC BY license does not by itself prove authority to sublicense the underlying Valve character for redistribution in a public game.",
+        "No original package has been downloaded through an authenticated authorized Sketchfab flow in this environment, so no package SHA-256 can truthfully be recorded."
+      ]
+    }
+  ],
+  "temporaryPlaceholders": [
+    {
+      "team": "CT",
+      "path": "assets/characters/quaternius/soldier_ct.glb",
+      "source": "Quaternius Toon Shooter Game Kit via TinyStrike processing",
+      "license": "CC0",
+      "status": "TEMPORARY_PLACEHOLDER_NOT_V3_FINAL"
+    },
+    {
+      "team": "T",
+      "path": "assets/characters/quaternius/soldier_t.glb",
+      "source": "Quaternius Toon Shooter Game Kit via TinyStrike processing",
+      "license": "CC0",
+      "status": "TEMPORARY_PLACEHOLDER_NOT_V3_FINAL"
+    }
+  ]
+}

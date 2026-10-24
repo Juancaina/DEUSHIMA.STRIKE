@@ -10,6 +10,7 @@ import { buildAimMap, AIM_MAP_INFO } from './world/aim_map.js';
 import { preloadWadTextures } from './world/wad.js';
 import { buildAssaultMap, ASSAULT_MAP_INFO } from './world/assault_map.js';
 import { buildRedlineMap } from './world/redline_map.js';
+import { buildForgeMap } from './world/forge_map.js';
 import { DEFAULT_ONLINE_MAP, isOnlineMap, onlineMapLabel } from './world/online_map_pool.js';
 import { CharacterLibrary } from './characters.js';
 import { NameTagLayer } from './ui/name-tags.js';
@@ -19,6 +20,7 @@ import { RoundManager } from './rounds.js';
 import { Duel } from './duel.js';
 import { ClassicViewModel } from './classic-viewmodel.js';
 import { UI } from './ui/ui.js';
+import { MovementDebugHUD } from './ui/movement-debug.js';
 import { OnlineUI } from './ui/online-ui.js';
 import { OnlineSession } from './online/session.js';
 import { OnlineMatch } from './online/match.js';
@@ -37,7 +39,9 @@ const DEFAULT_SETTINGS = {
   crosshairColor: '#78ff63',
   crosshairSize: 1,
   language: 'es',
-  autoBhop: false,
+  // Kept for backwards-compatible settings serialization. V3 movement no longer
+  // depends on this flag: normal AIM matches force CS16_1V1_AUTOBHOP.
+  autoBhop: true,
 };
 
 const HIT_MULT = { head: 4.0, chest: 1.0, stomach: 1.25, legs: 0.75 };
@@ -153,6 +157,7 @@ export class Game {
     this.physics = new PhysicsWorld([]);
     this.player = new Player(this);
     this.ui = new UI(this);
+    this.movementDebug = new MovementDebugHUD(this);
 
     this._onResize = () => this.resize();
     window.addEventListener('resize', this._onResize);
@@ -216,7 +221,7 @@ export class Game {
       },
       onLobby: (lobby) => this.handleOnlineLobby(lobby),
       onStart: (payload) => this.startOnlineMatch(payload),
-      onMatchMessage: (type, payload) => this.online?.handleMessage?.(type, payload),
+      onMatchMessage: (type, payload, senderId) => this.online?.handleMessage?.(type, payload, senderId),
       onClosed: (reason) => this.handleOnlineClosed(reason),
       onError: (message) => this.onlineUI?.showError?.(message),
     });
@@ -232,6 +237,10 @@ export class Game {
   handleOnlineLobby(lobby) {
     this._onlineLobbyOpen = true;
     if (this.online) {
+      if (lobby?.started === true || lobby?.phase === 'match') {
+        this.online.syncRoster?.(lobby.players || lobby.roster || []);
+        return;
+      }
       this.returnToOnlineLobby(lobby);
       return;
     }
@@ -240,13 +249,13 @@ export class Game {
 
   handleOnlineClosed(reason) {
     if (this._onlineLeaving) return;
-    this.leaveOnline(reason || 'Se perdiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ la conexiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n con la sala', false);
+    this.leaveOnline(reason || 'Se perdiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ la conexiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n con la sala', false);
   }
 
   async startOnlineMatch(payload = {}) {
     if (!payload || !payload.role) return;
     if (!isOnlineMap(payload.map) || payload.map !== this.onlineSession?.lobby?.map) {
-      this.onlineUI?.showError?.('El mapa elegido no coincide con la sala. RecargÃƒÂ¡ ambos juegos.');
+      this.onlineUI?.showError?.('El mapa elegido no coincide con la sala. RecargÃƒÆ’Ã‚Â¡ ambos juegos.');
       return;
     }
     const mapId = payload.map;
@@ -267,6 +276,7 @@ export class Game {
           this.map = null;
         }
         this.map = mapId === 'aim_redline' ? buildRedlineMap(this)
+          : mapId === 'aim_forge' ? buildForgeMap(this)
           : mapId === 'cs_assault' ? buildAssaultMap(this) : buildAimMap(this);
       }
       this.physics.setColliders(this.map.colliders);
@@ -274,19 +284,36 @@ export class Game {
       this.effects.dispose();
       this.effects = new Effects(this);
 
+      const localPlayerId =
+        payload.playerId ||
+        payload.localPlayerId ||
+        this.onlineSession?.localPlayerId ||
+        this.onlineSession?.playerId;
+      const roster = Array.isArray(payload.players) ? payload.players : [];
+      const localRosterPlayer = roster.find(
+        (p) => String(p?.id || p?.playerId) === String(localPlayerId),
+      );
       const team =
-        payload.role === 'host'
-          ? payload.hostTeam || 'CT'
-          : payload.guestTeam || 'T';
+        localRosterPlayer?.team === 'T' || localRosterPlayer?.team === 'CT'
+          ? localRosterPlayer.team
+          : payload.role === 'host'
+            ? payload.hostTeam || 'CT'
+            : payload.guestTeam || 'T';
       const spawns = this.map.spawns?.[team];
       if (!spawns?.length) throw new Error(`El mapa no tiene spawn ${team}`);
       this.player.money = 0;
       this.player.kills = 0;
       this.player.deaths = 0;
       this.player.assists = 0;
-      const roll = payload.spawnRolls?.[team];
+      const keyedRoll = localPlayerId != null ? payload.spawnRolls?.[String(localPlayerId)] : undefined;
+      const legacyRoll = payload.spawnRolls?.[team];
+      const slot = Math.max(0, Math.floor(Number(localRosterPlayer?.slot) || 0));
+      const rawRoll = Number.isFinite(Number(keyedRoll)) ? Number(keyedRoll) : Number(legacyRoll);
+      const roll = Number.isFinite(rawRoll) && rawRoll >= 0 && rawRoll < 1
+        ? rawRoll
+        : Math.min(0.999999, (slot + 0.5) / Math.max(1, spawns.length));
       if (!(Number.isFinite(roll) && roll >= 0 && roll < 1))
-        throw new Error('La sala no enviÃƒÂ³ un spawn inicial vÃƒÂ¡lido.');
+        throw new Error('La sala no enviÃƒÆ’Ã‚Â³ un spawn inicial vÃƒÆ’Ã‚Â¡lido.');
       this.player.reset(team, spawns[Math.floor(roll * spawns.length)]);
       this.player.health = 100;
       this.player.armor = 100;
@@ -304,7 +331,13 @@ export class Game {
       this.online = new OnlineMatch(this, this.ensureOnlineSession(), payload);
       this.online.start();
 
-      this.matchConfig = { map: mapId, mode: 'aim', online: true, team };
+      this.matchConfig = {
+        map: mapId,
+        mode: 'aim',
+        online: true,
+        team,
+        onlineMode: payload.mode === '2v2' || Number(payload.maxPlayers) === 4 ? '2v2' : '1v1',
+      };
       this.ui.hideAll();
       this.ui.showHUD();
       this.ui.hideLoading?.();
@@ -315,7 +348,7 @@ export class Game {
       this.input.requestPointerLock();
       this._lockHintShown = false;
       this.ui.showCenterMessage?.(
-        payload.role === 'host' ? 'SOS EL HOST ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· PRIMERO A 10 RONDAS' : 'PRIMERO A 10 RONDAS',
+        (payload.role === 'host' ? 'SOS EL HOST · ' : '') + 'PRIMERO A ' + Math.max(1, Number(payload.targetRounds || payload.targetKills) || 13) + ' RONDAS',
         2600,
       );
     } catch (err) {
@@ -489,7 +522,7 @@ export class Game {
 
   _setupClassicViewmodel() {
     if (globalThis.__DEUSHIMA_PUBLIC__) {
-      // El build pÃƒÂºblico no incluye mallas GoldSrc: se usa el arma procedural.
+      // El build pÃƒÆ’Ã‚Âºblico no incluye mallas GoldSrc: se usa el arma procedural.
       this.classicVM = null;
       return;
     }
@@ -513,8 +546,8 @@ export class Game {
   }
 
   /**
-   * Duelo 1v1 por rondas (modo principal): tres arenas compartidas con online.
-   * Usa un BotManager con un ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºnico bot enemigo y el manager Duel.
+   * Duelo 1v1 por rondas (modo principal): cuatro arenas compartidas con online.
+   * Usa un BotManager con un ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âºnico bot enemigo y el manager Duel.
    */
   async startDuel(config = {}) {
     this.audio.init();
@@ -538,7 +571,7 @@ export class Game {
     this._lockHintShown = false;
     this.state = 'loading';
     this.ui.hideAll();
-    this.ui.showLoading(`Cargando ${mapId} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· duel...`);
+    this.ui.showLoading(`Cargando ${mapId} ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· duel...`);
     await new Promise((r) => requestAnimationFrame(r));
 
     try {
@@ -549,6 +582,7 @@ export class Game {
           this.map = null;
         }
         this.map = mapId === 'aim_redline' ? buildRedlineMap(this)
+          : mapId === 'aim_forge' ? buildForgeMap(this)
           : mapId === 'cs_assault' ? buildAssaultMap(this) : buildAimMap(this);
       }
       this.physics.setColliders(this.map.colliders);
@@ -745,7 +779,7 @@ export class Game {
     this.audio.stopAmbient();
     this.disposeMatch();
     this.ui.hideHUD();
-    this.ui.showLoading('Cargando menÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº...');
+    this.ui.showLoading('Cargando menÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº...');
     const last = this.matchConfig?.map || localStorage.getItem('cs16-lastmap') || 'de_dust2';
     if (this.map) {
       this.map.dispose?.();
@@ -924,9 +958,10 @@ export class Game {
       }
     }
     if (this.online) {
-      const remote = this.online.getRemoteEntity?.();
-      if (remote?.alive && remote.team !== shooterTeam) {
-        const boxes = this.online.getRemoteHitboxes?.();
+      const remotes = this.online.getRemoteEntities?.() || [];
+      for (const remote of remotes) {
+        if (!remote?.alive || remote.team === shooterTeam) continue;
+        const boxes = this.online.getRemoteHitboxes?.(remote);
         if (boxes && boxes.length) consider(boxes, remote, 'remote');
       }
     }
@@ -1008,8 +1043,10 @@ export class Game {
         if (b.alive) counts[b.team]++;
       }
     }
-    const remote = this.online?.getRemoteEntity?.();
-    if (remote?.alive && (remote.team === 'CT' || remote.team === 'T')) counts[remote.team]++;
+    const remotes = this.online?.getRemoteEntities?.() || [];
+    for (const remote of remotes) {
+      if (remote?.alive && (remote.team === 'CT' || remote.team === 'T')) counts[remote.team]++;
+    }
     return counts;
   }
 
@@ -1040,18 +1077,19 @@ export class Game {
         });
       }
     }
-    const remote = this.online?.getRemoteEntity?.();
-    if (remote?.alive) {
+    const remotes = this.online?.getRemoteEntities?.() || [];
+    for (const remote of remotes) {
+      if (!remote?.alive) continue;
       list.push({
-        x: remote.pos.x,
-        z: remote.pos.z,
-        yaw: remote.yaw || 0,
-        team: remote.team,
-        isPlayer: false,
-        alive: true,
-        name: remote.name || 'Rival',
-        online: true,
-      });
+          x: remote.pos.x,
+          z: remote.pos.z,
+          yaw: remote.yaw || 0,
+          team: remote.team,
+          isPlayer: false,
+          alive: true,
+          name: remote.name || 'Rival',
+          online: true,
+        });
     }
     return list;
   }
@@ -1094,14 +1132,18 @@ export class Game {
     if (onlineHud) {
       roundHud = {
         phase: onlineHud.phase || 'live',
-        round: 1,
-        roundNumber: 1,
+        round: onlineHud.roundNumber || onlineHud.round || 1,
+        roundNumber: onlineHud.roundNumber || onlineHud.round || 1,
         timeLeft: 0,
         freezeLeft: 0,
         buyTimeLeft: 0,
-        scoreCT: Number(onlineHud.scoreHost) || 0,
-        scoreT: Number(onlineHud.scoreGuest) || 0,
-        objective: `PRIMERO A ${onlineHud.targetKills || 10} RONDAS ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· 1v1`,
+        scoreCT: Number(onlineHud.scoreCT ?? onlineHud.scoreHost) || 0,
+        scoreT: Number(onlineHud.scoreT ?? onlineHud.scoreGuest) || 0,
+        objective:
+          'PRIMERO A ' +
+          (onlineHud.targetRounds || onlineHud.targetKills || 13) +
+          ' RONDAS Â· ' +
+          String(onlineHud.mode || '1v1').toUpperCase(),
         teamAlive: this.getAliveCounts(),
         bomb: { planted: false },
         hostages: { total: 0, rescued: 0, carrying: 0 },
@@ -1285,8 +1327,8 @@ export class Game {
     this.camera.fov = this.settings.fov;
     this.camera.updateProjectionMatrix();
     if (data.round) {
-      this.ui.showRoundBanner?.(`RONDA ${data.round}`, this.matchConfig?.mode === 'hostage' ? 'RESCATE DE REHENES' : 'DESACTIVACIÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“N DE BOMBA', 'neutral');
-      this.ui.toast?.(`Ronda ${data.round} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${formatMoney(this.player.money)}`);
+      this.ui.showRoundBanner?.(`RONDA ${data.round}`, this.matchConfig?.mode === 'hostage' ? 'RESCATE DE REHENES' : 'DESACTIVACIÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œN DE BOMBA', 'neutral');
+      this.ui.toast?.(`Ronda ${data.round} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${formatMoney(this.player.money)}`);
     }
     if (!this.input.locked && this.state === 'playing') {
       setTimeout(() => {
@@ -1375,7 +1417,7 @@ export class Game {
     if (this.state === 'playing' && !this.input.locked && !this.ui.isOverlayOpen && !this.onlineUI?.isOpen) {
       if (!this._lockHintShown) {
         this._lockHintShown = true;
-        this.ui.showCenterMessage?.('HACÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â° CLIC PARA JUGAR', 3200);
+        this.ui.showCenterMessage?.('HACÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â° CLIC PARA JUGAR', 3200);
       }
     } else if (this.input.locked) {
       this._lockHintShown = false;
@@ -1383,7 +1425,7 @@ export class Game {
 
     if (this.state === 'playing' || this.state === 'roundover') {
       this.player.update(dt);
-      // Seguro contra huecos/roturas del piso o caÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­das fuera del mapa.
+      // Seguro contra huecos/roturas del piso o caÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­das fuera del mapa.
       if (
         this.player.alive &&
         (this.player.pos.y < -6 ||
@@ -1460,6 +1502,7 @@ export class Game {
     const dt = Math.min(0.1, this.clock.getDelta());
     try {
       this.update(dt);
+      this.movementDebug?.update(dt);
       this.renderer.render(this.scene, this.camera);
       this.classicVM?.render?.(this.renderer);
       this.nameTags?.update();

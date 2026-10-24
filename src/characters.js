@@ -1,9 +1,12 @@
 /**
- * Third-person characters based on Quaternius "Toon Shooter Game Kit" (CC0).
+ * Temporary V3 third-person placeholders based on Quaternius
+ * "Toon Shooter Game Kit" (CC0).
  *
  * The GLB files are processed assets from TinyStrike and retain the pack clips:
  * Idle, Walk, Run_Gun, Duck, Jump, Death, etc. They are loaded once and cloned
- * with SkeletonUtils for bots and online avatars.
+ * with SkeletonUtils for bots and online avatars. They are intentionally NOT
+ * presented as the final Leet Krew A / SAS Blue identities; see
+ * docs/v3-asset-manifest.json for the legal integration blockers.
  */
 import * as THREE from '../vendor/three.module.js';
 import { GLTFLoader } from '../vendor/loaders/GLTFLoader.js';
@@ -54,6 +57,20 @@ function firstClip(map, names) {
   return null;
 }
 
+async function loadGltfWithRetry(loader, url, attempts = 3) {
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await loader.loadAsync(url);
+    } catch (err) {
+      lastError = err;
+      if (attempt + 1 >= attempts) break;
+      await new Promise((resolve) => setTimeout(resolve, 120 * (attempt + 1)));
+    }
+  }
+  throw lastError || new Error(`Failed to load GLTF: ${url}`);
+}
+
 export class CharacterLibrary {
   constructor(game) {
     this.game = game;
@@ -70,7 +87,7 @@ export class CharacterLibrary {
       const loader = new GLTFLoader();
       const loaded = await Promise.all(
         Object.entries(MODELS).map(async ([team, info]) => {
-          const gltf = await loader.loadAsync(info.url);
+          const gltf = await loadGltfWithRetry(loader, info.url);
           gltf.scene.traverse((obj) => {
             if (!obj.isMesh && !obj.isSkinnedMesh) return;
             obj.frustumCulled = false;
@@ -120,8 +137,16 @@ export class CharacterLibrary {
     root.add(model);
 
     const gunMeshes = {};
+    const aimBones = {};
     model.traverse((obj) => {
       if (GUN_MESH_NAMES.has(obj.name)) gunMeshes[obj.name] = obj;
+      if (
+        obj.isBone &&
+        ['Torso', 'Neck', 'Head', 'Shoulder.L', 'Shoulder.R', 'UpperArm.L', 'UpperArm.R'].includes(obj.name) &&
+        !aimBones[obj.name]
+      ) {
+        aimBones[obj.name] = obj;
+      }
     });
 
     const mixer = new THREE.AnimationMixer(model);
@@ -172,6 +197,7 @@ export class CharacterLibrary {
       mixer,
       actions,
       gunMeshes,
+      aimBones,
       yawOffset: 0,
       targetHeight: TARGET_HEIGHT,
       get state() {
@@ -184,25 +210,59 @@ export class CharacterLibrary {
       update(dt, actor = {}, moving = false) {
         const step = Math.min(0.1, Math.max(0, Number(dt) || 0));
         const speed = Number(actor.speed ?? actor.moveSpeed ?? actor._speed) || 0;
+        // `moving` is only a fallback for callers that do not expose a measured
+        // velocity. RemoteAvatar always sends speed, so slow Shift movement can
+        // correctly use Walk instead of being promoted to Run_Gun.
+        const locomotionSpeed = speed > 0 ? speed : moving ? 1.8 : 0;
         const crouching = !!actor.crouching;
         const onGround = actor.onGround !== false;
+        const jumpState = actor.jumpState === 'rise' || actor.jumpState === 'fall'
+          ? actor.jumpState
+          : onGround ? 'ground' : Number(actor.velocity?.y) > 0.12 ? 'rise' : 'fall';
+        const shooting = !!actor.shooting;
+        const reloading = !!actor.reloading;
 
         setWeapon(actor.weaponId);
 
         let state = 'Idle';
         if (crouching) state = 'Duck';
+        else if (!onGround && jumpState === 'rise') state = 'Jump';
         else if (!onGround) state = 'Jump_Idle';
-        else if (moving || speed > 3.2) state = 'Run_Gun';
-        else if (speed > 0.45) state = 'Walk';
+        else if (shooting && locomotionSpeed > 3.2) state = 'Run_Shoot';
+        else if (shooting) state = 'Idle_Shoot';
+        else if (reloading) state = 'Idle';
+        else if (locomotionSpeed > 3.2) state = 'Run_Gun';
+        else if (locomotionSpeed > 0.45) state = 'Walk';
 
         play(state);
         const action = currentName ? actions[currentName] : null;
         if (action && currentName === 'run_gun') {
-          action.timeScale = Math.max(0.72, Math.min(1.4, speed / 5.6 + 0.2));
+          action.timeScale = Math.max(0.72, Math.min(1.4, locomotionSpeed / 5.6 + 0.2));
+        } else if (action && currentName === 'walk') {
+          action.timeScale = Math.max(0.72, Math.min(1.2, locomotionSpeed / 2.7 + 0.2));
         } else if (action) {
           action.timeScale = 1;
         }
         mixer.update(step);
+
+        // Lightweight additive aim pose for the temporary Quaternius placeholder.
+        // AnimationMixer writes the base locomotion pose first; these small local
+        // rotations distribute pitch across the upper body instead of tilting the
+        // whole avatar rigidly. Exact Leet/SAS retargeting remains a separate V3 task.
+        const pitch = Math.max(-1.35, Math.min(1.35, Number(actor.pitch) || 0));
+        const pitchWeights = {
+          Torso: 0.18,
+          Neck: 0.18,
+          Head: 0.16,
+          'Shoulder.L': 0.1,
+          'Shoulder.R': 0.1,
+          'UpperArm.L': 0.12,
+          'UpperArm.R': 0.12,
+        };
+        for (const [name, weight] of Object.entries(pitchWeights)) {
+          const bone = aimBones[name];
+          if (bone) bone.rotation.x += pitch * weight;
+        }
       },
     };
   }

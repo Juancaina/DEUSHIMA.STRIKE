@@ -8,6 +8,7 @@
 import * as THREE from '../vendor/three.module.js';
 import { clamp, expDamp, rand, DEG } from './core/utils.js';
 import { ViewModel } from './viewmodel.js';
+import { DroppedWeaponSystem } from './world/dropped-weapons.js';
 
 const UP = new THREE.Vector3(0, 1, 0);
 const GRENADE_IDS = ['he', 'flash', 'smoke'];
@@ -16,6 +17,24 @@ const GRENADE_COLORS = { he: 0x44583c, flash: 0x777c82, smoke: 0x8d7d5e };
 const AMMO_PRICE = { primary: 60, secondary: 30 };
 const RELOAD_TIME = 2.0;
 const RELOAD_SOUND = 'reload_start';
+const MOVE_SPEED = {
+  knife: 6.25,
+  glock: 6.25,
+  usp: 6.25,
+  deagle: 6.25,
+  mp5: 6.25,
+  ak47: 5.525,
+  m4a1: 5.75,
+  awp: 5.25,
+  scout: 6.5,
+  m3: 5.75,
+  xm1014: 6.0,
+  m249: 5.5,
+  he: 6.25,
+  flash: 6.25,
+  smoke: 6.25,
+  c4: 6.25,
+};
 
 /**
  * Weapon data. Approximate CS 1.6 values.
@@ -568,8 +587,13 @@ export class WeaponSystem {
 
     /** @type {Array<{id:string,pos:THREE.Vector3,vel:THREE.Vector3,mesh:THREE.Mesh,fuse:number,life:number}>} */
     this.grenades = [];
-    /** @type {Array<{entry:{id:string,magazine:number,reserve:number},x:number,y:number,z:number,mesh:?THREE.Mesh,pickableAt:number}>} */
-    this.dropped = [];
+    this.droppedWeapons = new DroppedWeaponSystem(game, {
+      getWeaponInfo: (id) => WEAPONS[id] || null,
+      canPickup: (drop) => this._canPickupDrop(drop),
+      onPickup: (drop) => this._pickupDrop(drop),
+    });
+    // Compatibility for code that inspects the local dropped list.
+    this.dropped = this.droppedWeapons.items;
 
     this._tmpVec = new THREE.Vector3();
     this._eye = new THREE.Vector3();
@@ -659,6 +683,7 @@ export class WeaponSystem {
     this._clearGrenadeProjectiles();
     this._clearDropped();
     this._disposeGrenadeAssets();
+    this.droppedWeapons.dispose();
     try {
       this._unsubscribeLock?.();
     } catch {
@@ -691,6 +716,10 @@ export class WeaponSystem {
 
   _currentWeapon() {
     return WEAPONS[this.currentId] || null;
+  }
+
+  getMoveSpeed() {
+    return MOVE_SPEED[this.currentId] ?? 6.25;
   }
 
   _currentEntry() {
@@ -835,13 +864,21 @@ export class WeaponSystem {
     let entry = null;
     if (this.inventory.primary?.id === id) {
       entry = this.inventory.primary;
-      this.inventory.primary = null;
     } else if (this.inventory.secondary?.id === id) {
       entry = this.inventory.secondary;
-      this.inventory.secondary = null;
     }
     if (!entry) return false;
-    this._spawnDrop(entry);
+
+    const payload = { id: entry.id, magazine: entry.magazine, reserve: entry.reserve };
+    const transform = this._dropTransform();
+    if (typeof this.game?.online?.requestWeaponDrop === 'function') {
+      const requested = this.game.online.requestWeaponDrop(payload, transform);
+      return requested !== false;
+    }
+
+    if (this.inventory.primary?.id === id) this.inventory.primary = null;
+    else if (this.inventory.secondary?.id === id) this.inventory.secondary = null;
+    this._spawnDrop(payload, transform);
     this._equipBest();
     this.game?.ui?.toast?.(`Tiraste ${w.name}`);
     return true;
@@ -982,7 +1019,8 @@ export class WeaponSystem {
     const speed = p?.getVelocity2D?.() ?? 0;
     if (p?.crouching) spread *= w.crouchSpread;
     else if (p?.walking) spread *= 0.82;
-    spread += (Math.min(speed, 9) / 5.6) * w.moveSpread;
+    const runSpeed = Math.max(0.1, this.getMoveSpeed());
+    spread += (Math.min(speed, runSpeed * 1.6) / runSpeed) * w.moveSpread;
     if (p && !p.onGround) spread += w.airSpread;
     if (this.isScoped()) spread = spread * 0.06 + 0.03;
     spread += this.dynamicSpread;
@@ -1376,14 +1414,6 @@ export class WeaponSystem {
       for (const mat of Object.values(this._grenadeMats)) mat.dispose?.();
       this._grenadeMats = null;
     }
-    if (this._dropGeo) {
-      this._dropGeo.dispose?.();
-      this._dropGeo = null;
-    }
-    if (this._dropMat) {
-      this._dropMat.dispose?.();
-      this._dropMat = null;
-    }
   }
 
   _updateGrenadeProjectiles(dt) {
@@ -1518,84 +1548,182 @@ export class WeaponSystem {
   // Dropped weapons (G)
   // ---------------------------------------------------------------------------
 
-  _spawnDrop(entry) {
+  _dropTransform() {
+    const player = this.game.player;
+    const yaw = player?.yaw || 0;
+    const forwardX = -Math.sin(yaw);
+    const forwardZ = -Math.cos(yaw);
+    return {
+      position: {
+        x: (player?.pos.x || 0) + forwardX * 0.45,
+        y: (player?.pos.y || 0) + 0.34,
+        z: (player?.pos.z || 0) + forwardZ * 0.45,
+      },
+      velocity: { x: forwardX * 1.15, y: 0.5, z: forwardZ * 1.15 },
+      yaw: -yaw,
+    };
+  }
+
+  _spawnDrop(entry, transform = null) {
     const w = WEAPONS[entry.id];
-    let mesh = null;
-    if (this.game.scene) {
-      if (!this._dropGeo) this._dropGeo = new THREE.BoxGeometry(0.5, 0.11, 0.09);
-      if (!this._dropMat) {
-        this._dropMat = new THREE.MeshStandardMaterial({
-          color: 0x2c3034,
-          roughness: 0.7,
-          metalness: 0.35,
-        });
-      }
-      mesh = new THREE.Mesh(this._dropGeo, this._dropMat);
-      const yaw = this.game.player?.yaw || 0;
-      const px = (this.game.player?.pos.x || 0) - Math.sin(yaw) * 0.45;
-      const pz = (this.game.player?.pos.z || 0) - Math.cos(yaw) * 0.45;
-      const py = (this.game.player?.pos.y || 0) + 0.06;
-      mesh.position.set(px, py, pz);
-      mesh.rotation.y = -yaw;
-      this.game.scene.add(mesh);
-    }
-    this.dropped.push({
-      entry: { id: entry.id, magazine: entry.magazine, reserve: entry.reserve },
-      x: mesh?.position.x ?? this.game.player?.pos.x ?? 0,
-      y: (this.game.player?.pos.y || 0) + 0.06,
-      z: mesh?.position.z ?? this.game.player?.pos.z ?? 0,
-      mesh,
-      pickableAt: this.time + 0.5,
-      armed: false,
-      name: w?.name || entry.id,
+    if (!w) return null;
+    const dropTransform = transform || this._dropTransform();
+    return this.droppedWeapons.spawn({
+      weaponId: entry.id,
+      ammo: { magazine: entry.magazine, reserve: entry.reserve },
+      ...dropTransform,
     });
-    if (this.dropped.length > 10) {
-      const old = this.dropped.shift();
-      old.mesh?.removeFromParent?.();
-    }
   }
 
   _updateDropped(dt) {
-    if (!this.dropped.length) return;
-    const player = this.game.player;
-    for (let i = this.dropped.length - 1; i >= 0; i--) {
-      const d = this.dropped[i];
-      if (d.mesh) d.mesh.rotation.y += dt * 0.6;
-      if (!player?.alive) continue;
-      const dx = player.pos.x - d.x;
-      const dz = player.pos.z - d.z;
-      const dy = player.pos.y - d.y;
-      const distSq = dx * dx + dz * dz;
-      // Do not instantly re-pick the weapon we just dropped: walk away first.
-      if (!d.armed) {
-        if (distSq > 1.9 * 1.9) d.armed = true;
-        continue;
+    this.droppedWeapons.update(dt, this.game.player);
+  }
+
+  _canPickupDrop(drop) {
+    const w = WEAPONS[drop?.weaponId];
+    if (!w || (w.slot !== 1 && w.slot !== 2)) return false;
+    if (w.slot === 1) return !this.inventory.primary;
+    return !this.inventory.secondary;
+  }
+
+  _pickupDrop(drop) {
+    const w = WEAPONS[drop?.weaponId];
+    if (!w) return false;
+    if (typeof this.game?.online?.requestWeaponPickup === 'function') {
+      const lastRequest = Number(drop.pickupRequestAt);
+      if (!Number.isFinite(lastRequest) || this.droppedWeapons.time - lastRequest >= 0.35) {
+        drop.pickupRequestAt = this.droppedWeapons.time;
+        this.game.online.requestWeaponPickup(drop.id);
       }
-      if (this.time < d.pickableAt) continue;
-      if (distSq > 1.35 * 1.35 || Math.abs(dy) > 1.6) continue;
-      const w = WEAPONS[d.entry.id];
-      if (!w) {
-        d.mesh?.removeFromParent?.();
-        this.dropped.splice(i, 1);
-        continue;
-      }
-      if (w.slot === 1 && this.inventory.primary) continue;
-      d.mesh?.removeFromParent?.();
-      if (w.slot === 1) {
-        this.inventory.primary = { ...d.entry };
-        this._equip(d.entry.id);
-      } else if (w.slot === 2) {
-        this.inventory.secondary = { ...d.entry };
-        this._equip(d.entry.id);
-      }
-      this.game.ui?.toast?.(`Recogiste ${w.name}`);
-      this.dropped.splice(i, 1);
+      return false;
     }
+    return this.acceptPickup({
+      id: drop.weaponId,
+      magazine: drop.ammo.magazine,
+      reserve: drop.ammo.reserve,
+    });
   }
 
   _clearDropped() {
-    for (const d of this.dropped) d.mesh?.removeFromParent?.();
-    this.dropped.length = 0;
+    this.droppedWeapons.clear();
+  }
+
+  serializeDroppedWeapons() {
+    return this.droppedWeapons.serializeSnapshot();
+  }
+
+  applyDroppedWeaponsSnapshot(snapshot) {
+    return this.droppedWeapons.applySnapshot(snapshot);
+  }
+
+  setDroppedWeaponPickupEnabled(enabled) {
+    this.droppedWeapons.setLocalPickupEnabled(enabled);
+  }
+
+  spawnNetworkDrop(drop) {
+    if (!drop || typeof drop !== 'object') return null;
+    const id = typeof drop.id === 'string' ? drop.id : null;
+    if (id) this.droppedWeapons.remove(id);
+    const rawPickableIn = Number(drop.pickableIn);
+    const rawPickableAt = Number(drop.pickableAt);
+    const rawCreatedAt = Number(drop.createdAt);
+    const createdAtSeconds = Number.isFinite(rawCreatedAt)
+      ? (rawCreatedAt > 1e10 ? rawCreatedAt / 1000 : rawCreatedAt)
+      : NaN;
+    const pickableAtSeconds = Number.isFinite(rawPickableAt)
+      ? (rawPickableAt > 1e10 ? rawPickableAt / 1000 : rawPickableAt)
+      : NaN;
+    const pickableIn = Number.isFinite(rawPickableIn)
+      ? Math.max(0, rawPickableIn)
+      : Number.isFinite(createdAtSeconds) && Number.isFinite(pickableAtSeconds)
+        ? Math.max(0, pickableAtSeconds - createdAtSeconds)
+        : null;
+    return this.droppedWeapons.spawn({
+      id,
+      weaponId: drop.weaponId || drop.weapon || drop.entry?.id,
+      ownerId: drop.ownerId,
+      ammo: drop.ammo || drop.entry,
+      position: drop.position || drop.pos,
+      velocity: drop.velocity || drop.vel,
+      yaw: drop.yaw,
+      angularVelocity: drop.angularVelocity,
+      pickableAt: pickableIn == null ? drop.pickableAt : undefined,
+      pickableIn,
+      pickupDelay: pickableIn == null ? drop.pickupDelay : undefined,
+      armed: drop.armed,
+      grounded: drop.grounded,
+    });
+  }
+
+  removeNetworkDrop(id) {
+    return this.droppedWeapons.remove(id);
+  }
+
+  applyNetworkDrops(list) {
+    return this.droppedWeapons.applySnapshot(list);
+  }
+
+  acceptPickup(entry, opts = {}) {
+    const id = String(entry?.id || entry?.weaponId || entry?.weapon || '');
+    const w = WEAPONS[id];
+    if (!w || (w.slot !== 1 && w.slot !== 2)) return false;
+    const accepted = {
+      id,
+      magazine: Math.max(0, Math.floor(Number(entry?.magazine ?? entry?.ammo?.magazine ?? w.magazine) || 0)),
+      reserve: Math.max(0, Math.floor(Number(entry?.reserve ?? entry?.ammo?.reserve ?? w.reserve) || 0)),
+    };
+    this._cancelReload();
+    if (this.scoped) this._unscope();
+    if (w.slot === 1) this.inventory.primary = accepted;
+    else this.inventory.secondary = accepted;
+    if (opts.equip !== false) this._equip(id, { silent: !!opts.silent });
+    if (!opts.silent) this.game.ui?.toast?.(`Recogiste ${w.name}`);
+    return true;
+  }
+
+  getInventorySnapshot() {
+    return {
+      primary: this.inventory.primary ? { ...this.inventory.primary } : null,
+      secondary: this.inventory.secondary ? { ...this.inventory.secondary } : null,
+      grenades: { ...this.inventory.grenades },
+      currentId: this.currentId,
+      lastId: this.lastId,
+    };
+  }
+
+  applyInventorySnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') return false;
+    const normalizeEntry = (entry, slot) => {
+      const id = String(entry?.id || '');
+      const w = WEAPONS[id];
+      if (!w || w.slot !== slot) return null;
+      return {
+        id,
+        magazine: Math.max(0, Math.floor(Number(entry.magazine) || 0)),
+        reserve: Math.max(0, Math.floor(Number(entry.reserve) || 0)),
+      };
+    };
+    this._cancelReload();
+    this._unscope();
+    this.inventory.primary = normalizeEntry(snapshot.primary, 1);
+    this.inventory.secondary = normalizeEntry(snapshot.secondary, 2);
+    for (const id of GRENADE_IDS) {
+      this.inventory.grenades[id] = Math.min(
+        GRENADE_MAX[id] || 1,
+        Math.max(0, Math.floor(Number(snapshot.grenades?.[id]) || 0)),
+      );
+    }
+    const requested = typeof snapshot.currentId === 'string' ? snapshot.currentId : null;
+    const nextId = requested && this.hasWeapon(requested)
+      ? requested
+      : this.inventory.primary?.id || this.inventory.secondary?.id || 'knife';
+    this.lastId =
+      typeof snapshot.lastId === 'string' && this.hasWeapon(snapshot.lastId) ? snapshot.lastId : null;
+    this.currentId = nextId;
+    this.dynamicSpread = 0;
+    this.deployTimer = 0.08;
+    this.viewmodel?.setWeapon(nextId);
+    return true;
   }
 
   // ---------------------------------------------------------------------------
@@ -1655,6 +1783,7 @@ export class WeaponSystem {
     const owned = this.hasWeapon(id);
     let slotOk = true;
     if (w.slot === 1) slotOk = !this.inventory.primary;
+    if (w.slot === 2) slotOk = !this.inventory.secondary;
     if (w.slot === 4) slotOk = (this.inventory.grenades[id] || 0) < (GRENADE_MAX[id] || 1);
     return {
       id,
@@ -1704,6 +1833,9 @@ export class WeaponSystem {
     if (this.hasWeapon(id)) return this._fail(`Ya tenés ${w.name}`);
     if (w.slot === 1 && this.inventory.primary) {
       return this._fail(`Ya tenés ${WEAPONS[this.inventory.primary.id].name}. Tirala con G`);
+    }
+    if (w.slot === 2 && this.inventory.secondary) {
+      return this._fail(`Ya tenés ${WEAPONS[this.inventory.secondary.id].name}. Tirala con G`);
     }
     if (w.slot === 4) {
       const max = GRENADE_MAX[id] || 1;

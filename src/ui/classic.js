@@ -433,11 +433,12 @@ class ClassicMenu {
       <nav class="cm-nav" aria-label="Men principal">
         <button class="cm-btn primary" data-cm="duel"><span class="idx">01</span>JUGAR 1V1<span class="hint">AIM_MAP</span></button>
         <button class="cm-btn" data-cm="redline"><span class="idx">02</span>AIM_REDLINE<span class="hint">REDLINE Â· BOTS</span></button>
-        <button class="cm-btn" data-cm="assault"><span class="idx">03</span>ASSAULT 1V1<span class="hint">ALMACÃ‰N</span></button>
-        <button class="cm-btn" data-cm="online"><span class="idx">04</span>ONLINE 1V1<span class="hint">AMIGOS</span></button>
-        <button class="cm-btn" data-cm="options"><span class="idx">05</span>OPCIONES<span class="hint">AJUSTES</span></button>
-        <button class="cm-btn" data-cm="help"><span class="idx">06</span>COMO JUGAR<span class="hint">AYUDA</span></button>
-        <button class="cm-btn" data-cm="quit"><span class="idx">07</span>SALIR<span class="hint">FIN</span></button>
+        <button class="cm-btn" data-cm="forge"><span class="idx">03</span>AIM_FORGE<span class="hint">TRAINING YARD</span></button>
+        <button class="cm-btn" data-cm="assault"><span class="idx">04</span>ASSAULT 1V1<span class="hint">ALMACÃ‰N</span></button>
+        <button class="cm-btn" data-cm="online"><span class="idx">05</span>ONLINE 1V1 / 2V2<span class="hint">AMIGOS</span></button>
+        <button class="cm-btn" data-cm="options"><span class="idx">06</span>OPCIONES<span class="hint">AJUSTES</span></button>
+        <button class="cm-btn" data-cm="help"><span class="idx">07</span>COMO JUGAR<span class="hint">AYUDA</span></button>
+        <button class="cm-btn" data-cm="quit"><span class="idx">08</span>SALIR<span class="hint">FIN</span></button>
       </nav>
       <aside class="cm-server">
         <h2>Servidor local <span>offline</span></h2>
@@ -453,7 +454,7 @@ class ClassicMenu {
         </div>
       </aside>
       <div class="cm-foot">
-        <span><b>ENTER</b> JUGAR | <b>TAB</b> MARCADOR | <b>B</b> COMPRAR | <b>ESC</b> PAUSA</span>
+        <span><b>ENTER</b> JUGAR | <b>TAB</b> MARCADOR | <b>G</b> TIRAR ARMA | <b>ESC</b> PAUSA</span>
         <span class="cm-build">DEUSHIMA STRIKE  assets CS 1.6</span>
       </div>
       <div class="cm-modal hidden" data-cm-modal></div>
@@ -467,6 +468,7 @@ class ClassicMenu {
         const action = btn.dataset.cm;
         if (action === 'duel') this._startDuel();
         else if (action === 'redline') this._startRedline();
+        else if (action === 'forge') this._startForge();
         else if (action === 'assault') this._startAssault();
         else if (action === 'online') this._startOnline();
         else if (action === 'fullscreen') this._toggleFullscreen();
@@ -486,6 +488,7 @@ class ClassicMenu {
     const auto = new URLSearchParams(location.search).get('auto');
     if (auto === 'duel') setTimeout(() => this._startDuel(), 700);
     if (auto === 'redline') setTimeout(() => this._startRedline(), 700);
+    if (auto === 'forge') setTimeout(() => this._startForge(), 700);
     if (auto === 'assault') setTimeout(() => this._startAssault(), 700);
   }
   _toggleFullscreen() {
@@ -534,6 +537,16 @@ class ClassicMenu {
         roundsToWin: Number(this.game.settings.roundsToWin) || 13,
       });
     }
+  }
+  _startForge() {
+    this._hide();
+    this.game._suppressPause = true;
+    setTimeout(() => { this.game._suppressPause = false; }, 1600);
+    this.game.startDuel({
+      map: 'aim_forge',
+      difficulty: 'normal',
+      roundsToWin: Number(this.game.settings.roundsToWin) || 13,
+    });
   }
   _startAssault() {
     this._hide();
@@ -600,24 +613,23 @@ class ClassicMenu {
   _helpMarkup() {
     return `
       <h2>Cmo jugar</h2>
-      <p class="lead">Duelo 1v1 por rondas en aim_1v1. Ambos empiezan vivos, un solo kill define la ronda.</p>
+      <p class="lead">AIM por rondas: 1v1 local o salas online 1v1 / 2v2. La ronda termina cuando cae un equipo completo.</p>
       <div class="cm-help-grid">
         <b>WASD</b><span>Moverse</span><b>Mouse</b><span>Apuntar</span>
         <b>Click izq.</b><span>Disparar</span><b>Click der.</b><span>Zoom AWP</span>
         <b>R</b><span>Recargar</span><b>1/2/3</b><span>Armas</span>
         <b>Shift</b><span>Caminar silencioso</span><b>Ctrl</b><span>Agacharse</span>
-        <b>Space</b><span>Saltar</span><b>B</b><span>Comprar</span>
+        <b>Space</b><span>Saltar / bhop</span><b>G</b><span>Tirar arma</span>
         <b>Tab</b><span>Marcador</span><b>Esc</b><span>Pausa</span>
       </div>
-      <p class="lead" style="margin-top:16px">Gana la ronda quien elimina al rival. La primera ronda empieza tras 3 segundos de congelado. Partida al primero en ganar 10 rondas.</p>
+      <p class="lead" style="margin-top:16px">Mapas compactos: AIM_MAP, AIM_REDLINE, AIM_FORGE y ASSAULT. Partida al primero en ganar 13 rondas.</p>
       <button class="cm-close" data-cm-close>CERRAR</button>
     `;
   }
   _onlineMarkup() {
     return `
-      <h2>Online 1v1</h2>
-      <p class="lead">El modo online por rondas est en integracin. Mientras tanto pods jugar el duelo local contra un bot con la misma lgica de rondas.</p>
-      <p class="lead">Para jugar con un amigo, el servidor Socket.io se inicia con <b>npm run server</b> y ambos entran desde la misma red o desde el servidor publicado.</p>
+      <h2>Online 1v1 / 2v2</h2>
+      <p class="lead">Cre una sala privada, eleg 1v1 o 2v2 y compart el cdigo o link de invitacin. El host mantiene el estado autoritativo de rondas, dao y armas.</p>
       <button class="cm-close" data-cm-close>CERRAR</button>
     `;
   }
@@ -736,7 +748,7 @@ class ClassicPause {
           <b>Shift</b><span>Caminar</span>
           <b>Ctrl</b><span>Agacharse</span>
           <b>Space</b><span>Saltar</span>
-          <b>B</b><span>Comprar</span>
+          <b>G</b><span>Tirar arma</span>
           <b>Tab</b><span>Marcador</span>
           <b>Esc</b><span>Pausa</span>
         </div>
@@ -761,9 +773,9 @@ class ClassicPause {
     } else {
       content.innerHTML = `
         <h2 class="cp-title">Juego</h2>
-        <p class="cp-desc">Duelo 1v1 rpido: primera ronda inmediata, sin freeze. La ronda arranca cuando el cuerpo toca el suelo. Gana el primero en llegar a 13; 12-12 es empate.</p>
+        <p class="cp-desc">AIM rpido con movimiento GoldSrc-like. En online 1v1 / 2v2 la ronda termina al eliminar al equipo rival y gana el primero en llegar a 13.</p>
         ${this._row('roundsToWin', 'Rondas para ganar', 1, 20, 1, 'range', 13)}
-        <div class="cp-note">Surf: R reinicia el recorrido. Al caer al vaco volvs al ltimo checkpoint.</div>`;
+        <div class="cp-note">G tira el arma actual; pods recoger armas del suelo al acercarte si el slot est libre.</div>`;
     }
     if (this.fromMenu) {
       this.root.querySelector('[data-cp="resume"]').textContent = 'VOLVER';

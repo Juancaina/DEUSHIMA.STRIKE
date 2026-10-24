@@ -1,8 +1,8 @@
 ﻿/**
- * DEUSHIMA STRIKE — UI Online 1v1
+ * DEUSHIMA STRIKE — UI Online PvP
  * -----------------------------------------------------------------------------
  * Módulo independiente de src/ui/ui.js. Se instancia como `game.onlineUI` y se
- * inicializa DESPUÉS de `ui.init()`, porque inyecta el botón ONLINE 1V1 en el
+ * inicializa DESPUÉS de `ui.init()`, porque inyecta el botón ONLINE en el
  * menú principal ya construido y añade su propio overlay dentro de #ui-root.
  *
  * Flujo: menú → home (crear/unirse) → host esperando código → lobby READY →
@@ -184,7 +184,7 @@ export class OnlineUI {
   }
 
   /**
-   * El botón ONLINE 1V1 del menú delega en Game para que cree/recree la
+   * El botón ONLINE del menú delega en Game para que cree/recree la
    * OnlineSession antes de mostrar la pantalla de crear/unirse.
    */
   _openFromMenu() {
@@ -270,12 +270,12 @@ export class OnlineUI {
   <header class="online-head">
     <div class="online-head-left">
       <div class="online-kicker">Multijugador · PeerJS P2P</div>
-      <h2 class="online-title">ONLINE <span>1V1</span></h2>
+      <h2 class="online-title">ONLINE <span>1V1 / 2V2</span></h2>
     </div>
     <div class="online-head-meta">
-      <span class="online-chip"><b>AIM_REDLINE · AIM_MAP · ASSAULT</b></span>
+      <span class="online-chip"><b>${ONLINE_MAPS.map((map) => map.label).join(' · ')}</b></span>
       <span class="online-chip">PRIMERO A 13 RONDAS</span>
-      <span class="online-chip">RONDA · RESPAWN 4S</span>
+      <span class="online-chip">RONDA · REINICIO AUTOMÁTICO</span>
     </div>
   </header>
 
@@ -288,7 +288,7 @@ export class OnlineUI {
           <h3>CREAR SALA</h3>
           <span class="online-panel-tag">HOST</span>
         </div>
-        <p class="online-copy">Creá una sala privada y compartí el código. Cuando tu rival se una y ambos estén listos, empieza la partida.</p>
+        <p class="online-copy">Creá una sala privada y compartí el código. El host puede jugar 1v1 o ampliar el lobby a 2v2.</p>
         <label class="online-field">
           <span class="online-label">TU NOMBRE</span>
           <input class="online-input" data-online-ref="nameInput" data-online-name="host" type="text" maxlength="16" placeholder="Jugador" autocomplete="off" spellcheck="false" />
@@ -327,24 +327,24 @@ export class OnlineUI {
         <h4>CÓMO FUNCIONA</h4>
         <ol>
           <li>Uno crea la sala y comparte el código o el link.</li>
-          <li>El otro se une con ese código y el mismo nombre.</li>
-          <li>Ambos pulsan READY en el lobby.</li>
-          <li>Primero en llegar a 10 bajas gana.</li>
+          <li>Los demás se unen con ese código.</li>
+          <li>Todos pulsan READY en el lobby.</li>
+          <li>Gana el primer equipo que alcance el objetivo de rondas.</li>
         </ol>
       </div>
       <div class="online-info-col">
-        <h4>REGLAS 1V1</h4>
+        <h4>REGLAS ONLINE</h4>
         <ul>
-          <li>El host elige AIM_REDLINE, AIM_MAP o ASSAULT en el lobby.</li>
-          <li>Respawn automático a los 2 segundos.</li>
-          <li>Loadout fijo: rifle + pistola + cuchillo.</li>
-          <li>Duelo por rondas: un kill cierra la ronda, respawn 4 s, primero a 13.</li>
+          <li>El host elige el mapa de la partida desde el lobby.</li>
+          <li>La ronda termina cuando cae un equipo completo.</li>
+          <li>Armamento inicial: rifle, pistola y cuchillo; podés recoger armas caídas.</li>
+          <li>La siguiente ronda comienza tras una breve pausa.</li>
         </ul>
       </div>
     </div>
 
     <div class="online-home-foot">
-      <span class="online-hint">Conexión P2P directa entre navegadores. Ambos jugadores deben estar online.</span>
+      <span class="online-hint">Conexión P2P directa entre navegadores. Todos los jugadores deben estar online.</span>
       <button type="button" class="btn ghost" data-online-action="back">VOLVER AL MENÚ</button>
     </div>
   </section>
@@ -357,7 +357,7 @@ export class OnlineUI {
         <h3>SALA CREADA</h3>
         <span class="online-panel-tag">HOST</span>
       </div>
-      <p class="online-copy">Compartí este código con tu rival. La sala queda abierta hasta que se una o la canceles.</p>
+      <p class="online-copy">Compartí este código con tus amigos. Elegí 2 o 4 jugadores mientras esperás.</p>
       <div class="online-code-label">CÓDIGO DE SALA</div>
       <div class="online-code" data-online-ref="hostCode">-----</div>
       <div class="online-linkline"><span class="online-link" data-online-ref="hostLink"></span></div>
@@ -365,11 +365,18 @@ export class OnlineUI {
         <button type="button" class="btn" data-online-action="copy-code">COPIAR CÓDIGO</button>
         <button type="button" class="btn" data-online-action="copy-link">COPIAR LINK</button>
       </div>
+      <label class="online-map-field">
+        <span class="online-label">TAMAÑO DE SALA · ELIGE EL HOST</span>
+        <select class="online-input online-map-select" data-online-ref="hostMaxPlayersSelect" aria-label="Cantidad de jugadores">
+          <option value="2">1V1 · 2 JUGADORES</option>
+          <option value="4">2V2 · 4 JUGADORES</option>
+        </select>
+      </label>
       <div class="online-statusbar online-host-status">
         <span class="online-status-dot is-busy" data-online-ref="hostStatusDot"></span>
         <span class="online-status-text" data-online-ref="hostStatus">ESPERANDO JUGADOR…</span>
       </div>
-      <div class="online-host-tip">Dejá esta pestaña abierta. Cuando tu rival se una, vas a ver el lobby automáticamente.</div>
+      <div class="online-host-tip">Dejá esta pestaña abierta. Cuando entre el primer jugador, vas a ver el lobby automáticamente.</div>
       <button type="button" class="btn ghost online-wide" data-online-action="back">CANCELAR Y VOLVER</button>
     </div>
   </section>
@@ -379,7 +386,7 @@ export class OnlineUI {
     <div class="online-panel online-lobby-panel">
       <div class="online-lobby-head">
         <div>
-          <div class="online-kicker">Lobby 1v1</div>
+          <div class="online-kicker" data-online-ref="lobbyModeLabel">Lobby 1v1</div>
           <h3 data-online-ref="lobbyCode">SALA -----</h3>
         </div>
         <div class="online-lobby-meta">
@@ -395,7 +402,15 @@ export class OnlineUI {
         </select>
       </label>
 
-      <div class="online-slots">
+      <label class="online-map-field">
+        <span class="online-label">JUGADORES · ELIGE EL HOST</span>
+        <select class="online-input online-map-select" data-online-ref="maxPlayersSelect" aria-label="Cantidad de jugadores">
+          <option value="2">1V1 · 2 JUGADORES</option>
+          <option value="4">2V2 · 4 JUGADORES</option>
+        </select>
+      </label>
+
+      <div class="online-slots" data-online-ref="slotsGrid">
         <div class="online-slot" data-online-ref="slotHost">
           <div class="slot-top">
             <span class="slot-role">HOST</span>
@@ -405,7 +420,7 @@ export class OnlineUI {
           <div class="slot-name" data-online-ref="hostName">—</div>
           <div class="slot-state is-pending" data-online-ref="hostReady">PENDIENTE</div>
         </div>
-        <div class="online-vs">VS</div>
+        <div class="online-vs" data-online-ref="slotsVs">VS</div>
         <div class="online-slot" data-online-ref="slotGuest">
           <div class="slot-top">
             <span class="slot-role">GUEST</span>
@@ -414,6 +429,24 @@ export class OnlineUI {
           </div>
           <div class="slot-name" data-online-ref="guestName">ESPERANDO JUGADOR</div>
           <div class="slot-state is-empty" data-online-ref="guestReady">SIN CONECTAR</div>
+        </div>
+        <div class="online-slot online-hidden" data-online-ref="slotPlayer3">
+          <div class="slot-top">
+            <span class="slot-role">JUGADOR 3</span>
+            <span class="slot-team ct">CT</span>
+            <span class="slot-you online-hidden" data-online-ref="player3You">VOS</span>
+          </div>
+          <div class="slot-name" data-online-ref="player3Name">ESPERANDO JUGADOR</div>
+          <div class="slot-state is-empty" data-online-ref="player3Ready">SIN CONECTAR</div>
+        </div>
+        <div class="online-slot online-hidden" data-online-ref="slotPlayer4">
+          <div class="slot-top">
+            <span class="slot-role">JUGADOR 4</span>
+            <span class="slot-team t">T</span>
+            <span class="slot-you online-hidden" data-online-ref="player4You">VOS</span>
+          </div>
+          <div class="slot-name" data-online-ref="player4Name">ESPERANDO JUGADOR</div>
+          <div class="slot-state is-empty" data-online-ref="player4Ready">SIN CONECTAR</div>
         </div>
       </div>
 
@@ -428,7 +461,7 @@ export class OnlineUI {
         <button type="button" class="btn" data-online-action="copy-link">COPIAR LINK</button>
         <button type="button" class="btn ghost" data-online-action="leave">SALIR</button>
       </div>
-      <div class="online-lobby-tip">Cuando ambos estén LISTOS, la partida empieza automáticamente.</div>
+      <div class="online-lobby-tip" data-online-ref="lobbyTip">Cuando ambos estén LISTOS, la partida empieza automáticamente.</div>
     </div>
   </section>
 
@@ -436,7 +469,7 @@ export class OnlineUI {
   <section class="online-view online-hidden" data-view="error">
     <div class="online-panel online-error-panel">
       <div class="online-error-icon">!</div>
-      <div class="online-kicker">Online 1v1</div>
+      <div class="online-kicker">Online 1v1 / 2v2</div>
       <h3 class="online-error-title">NO SE PUDO CONECTAR</h3>
       <p class="online-error-msg" data-online-ref="errorMsg">Revisá tu conexión e intentá de nuevo.</p>
       <div class="online-error-actions">
@@ -505,7 +538,7 @@ export class OnlineUI {
     btn.type = 'button';
     btn.className = 'menu-btn';
     btn.dataset.action = 'online-play';
-    btn.innerHTML = '<span class="mb-index">02</span>ONLINE 1V1<span class="mb-hint">MULTIJUGADOR</span>';
+    btn.innerHTML = '<span class="mb-index">02</span>ONLINE<span class="mb-hint">1V1 / 2V2</span>';
     btn.addEventListener('click', this._buttonClick);
     if (play && typeof play.after === 'function') {
       play.after(btn);
@@ -565,6 +598,9 @@ export class OnlineUI {
         if (!session?.setMap?.(map)) this._renderLobby();
       } else this._renderLobby();
     });
+    for (const select of [this._refs.hostMaxPlayersSelect, this._refs.maxPlayersSelect]) {
+      this._on(select, 'change', () => this._changeMaxPlayers(select));
+    }
 
     for (const input of [this._refs.nameInput, this._refs.nameInputJoin]) {
       if (!input) continue;
@@ -597,6 +633,17 @@ export class OnlineUI {
         this._join();
       });
     }
+  }
+
+  _changeMaxPlayers(select) {
+    if (!select) return;
+    const session = this._session();
+    const next = Number(select.value) === 4 ? 4 : 2;
+    if (this._roleNow() !== 'host' || typeof session?.setMaxPlayers !== 'function') {
+      this._syncMaxPlayersSelects();
+      return;
+    }
+    if (!session.setMaxPlayers(next)) this._syncMaxPlayersSelects();
   }
 
   _on(target, type, fn, opts) {
@@ -1008,6 +1055,7 @@ export class OnlineUI {
     this._setView('host');
     this._setText('hostCode', this._hostCode || '-----');
     this._setText('hostLink', this._hostLink || '');
+    this._syncMaxPlayersSelects();
     this._setStatus('ESPERANDO JUGADOR…', 'busy');
   }
 
@@ -1017,15 +1065,15 @@ export class OnlineUI {
 
   showLobby(lobby) {
     if (!lobby || typeof lobby !== 'object') return;
-    // Mientras host() está en curso, session emite un lobby con guest=null.
-    // No mostramos el lobby todavía: el host debe ver su código primero.
-    if (this._creatingHost && !lobby.guest) {
-      this._lobby = lobby;
+    this._lobby = lobby;
+    this._resolveRole(lobby);
+    const hasRemotePlayer = this._lobbyPlayers(lobby).some((player) => !player.isHost && player.slot !== 0);
+    // El host conserva la pantalla con el código hasta que entre el primer rival.
+    if ((this._creatingHost || this._screen === 'host') && this._role === 'host' && !hasRemotePlayer) {
+      this._syncMaxPlayersSelects();
       return;
     }
     const wasLobby = this._screen === 'lobby';
-    this._lobby = lobby;
-    this._resolveRole(lobby);
     this._setBusy(false);
     // Actualizaciones de READY/lobby mientras ya estamos en el lobby: sólo
     // refrescamos datos para no reiniciar la vista ni soltar el pointer lock.
@@ -1066,64 +1114,146 @@ export class OnlineUI {
     if (role === 'host' || role === 'guest') this._role = role;
   }
 
+  _sessionPlayerId() {
+    const session = this._session();
+    if (!session) return '';
+    try {
+      return session.localPlayerId ? String(session.localPlayerId) : '';
+    } catch {
+      return '';
+    }
+  }
+
+  _lobbyPlayers(lobby = this._lobby) {
+    if (!lobby || typeof lobby !== 'object') return [];
+    let players = [];
+    if (Array.isArray(lobby.players)) players = lobby.players.filter(Boolean);
+    else if (lobby.roster && typeof lobby.roster === 'object') players = Object.values(lobby.roster).filter(Boolean);
+    else players = [lobby.host, lobby.guest].filter(Boolean);
+    return [...players].sort((a, b) => num(a?.slot, 99) - num(b?.slot, 99));
+  }
+
+  _localLobbyPlayer(lobby = this._lobby) {
+    const players = this._lobbyPlayers(lobby);
+    const playerId = this._sessionPlayerId();
+    if (playerId) {
+      const byId = players.find((player) => player?.id === playerId);
+      if (byId) return byId;
+    }
+    const role = this._roleNow() || this._role;
+    if (role === 'host') return players.find((player) => player?.isHost || player?.slot === 0) || lobby?.host || null;
+    if (role === 'guest') {
+      const myName = this._myName || this._readName();
+      return players.find((player) => !player?.isHost && player?.name === myName) || lobby?.guest || null;
+    }
+    return null;
+  }
+
+  _syncMaxPlayersSelects() {
+    const lobby = this._lobby || this._sessionLobby(this._session());
+    const maxPlayers = Number(lobby?.maxPlayers) === 4 ? 4 : 2;
+    const isHost = (this._roleNow() || this._role) === 'host';
+    for (const select of [this._refs.hostMaxPlayersSelect, this._refs.maxPlayersSelect]) {
+      if (!select) continue;
+      select.value = String(maxPlayers);
+      select.disabled = !isHost;
+    }
+  }
+
   _renderLobby() {
     const lobby = this._lobby || {};
     const role = this._role;
-    const host = lobby.host || null;
-    const guest = lobby.guest || null;
+    const players = this._lobbyPlayers(lobby);
+    const maxPlayers = Number(lobby.maxPlayers) === 4 ? 4 : 2;
+    const host = players.find((player) => player?.isHost || player?.slot === 0) || lobby.host || null;
+    const guest = players.find((player) => player?.slot === 1) || lobby.guest || null;
+    const player3 = players.find((player) => player?.slot === 2) || null;
+    const player4 = players.find((player) => player?.slot === 3) || null;
+    const local = this._localLobbyPlayer(lobby);
+    const localId = local?.id || '';
     const code = this._lobbyCode(lobby);
     const target = num(lobby.targetKills, DEFAULT_TARGET) || DEFAULT_TARGET;
 
     this._setText('lobbyCode', `SALA ${code || '-----'}`);
     this._setText('lobbyTarget', target);
+    this._setText('lobbyModeLabel', maxPlayers === 4 ? 'Lobby 2v2' : 'Lobby 1v1');
+    this._setText(
+      'lobbyTip',
+      maxPlayers === 4
+        ? 'Cuando los 4 jugadores estén LISTOS, la partida empieza automáticamente.'
+        : 'Cuando ambos estén LISTOS, la partida empieza automáticamente.',
+    );
     const map = isOnlineMap(lobby.map) ? lobby.map : DEFAULT_ONLINE_MAP;
     this._setText('lobbyMapName', onlineMapLabel(map));
     if (this._refs.mapSelect) {
       this._refs.mapSelect.value = map;
       this._refs.mapSelect.disabled = role !== 'host';
     }
-    this._renderSlot('host', host, role === 'host');
-    this._renderSlot('guest', guest, role === 'guest');
+    this._syncMaxPlayersSelects();
+    if (this._refs.slotsGrid) {
+      this._refs.slotsGrid.style.gridTemplateColumns = maxPlayers === 4
+        ? 'repeat(2, minmax(0, 1fr))'
+        : '';
+    }
+    if (this._refs.slotsVs) this._refs.slotsVs.classList.toggle('online-hidden', maxPlayers === 4);
+    for (const key of ['slotPlayer3', 'slotPlayer4']) {
+      const node = this._refs[key];
+      if (node) node.classList.toggle('online-hidden', maxPlayers !== 4);
+    }
+    this._renderSlot('host', host, !!host && (localId ? host.id === localId : role === 'host'));
+    this._renderSlot('guest', guest, !!guest && (localId ? guest.id === localId : role === 'guest'));
+    this._renderSlot('player3', player3, !!player3 && !!localId && player3.id === localId);
+    this._renderSlot('player4', player4, !!player4 && !!localId && player4.id === localId);
 
-    const local = role === 'host' ? host : role === 'guest' ? guest : null;
     const localReady = !!(local && local.ready);
-    const other = role === 'host' ? guest : host;
-    const otherReady = !!(other && other.ready);
-    const bothReady = !!(host && guest && host.ready && guest.ready);
+    const connectedPlayers = players.filter((player) => player?.connected !== false);
+    const roomFull = players.length === maxPlayers && connectedPlayers.length === maxPlayers;
+    const others = local ? players.filter((player) => player?.id !== local.id) : players;
+    const othersReady = others.length > 0 && others.every((player) => player?.connected !== false && player?.ready);
+    const allReady = roomFull && players.every((player) => player?.ready);
 
     const readyBtn = this._refs.readyBtn;
     if (readyBtn) {
       readyBtn.textContent = localReady ? 'LISTO ✓' : 'READY';
       readyBtn.classList.toggle('is-ready', localReady);
       readyBtn.setAttribute('aria-pressed', localReady ? 'true' : 'false');
+      readyBtn.disabled = !(local && local.connected !== false);
     }
 
     let message;
     let kind;
-    if (!guest) {
-      message = 'ESPERANDO AL OTRO JUGADOR…';
+    if (!roomFull) {
+      message = `ESPERANDO JUGADORES · ${connectedPlayers.length}/${maxPlayers}`;
       kind = 'busy';
-    } else if (bothReady) {
+    } else if (allReady) {
       message = 'TODO LISTO · INICIANDO PARTIDA…';
       kind = 'ok';
-    } else if (localReady && !otherReady) {
-      message = 'ESPERANDO A QUE TU RIVAL ESTÉ LISTO…';
+    } else if (localReady && !othersReady) {
+      message = 'ESPERANDO A QUE LOS DEMÁS ESTÉN LISTOS…';
       kind = 'busy';
-    } else if (!localReady && otherReady) {
-      message = 'TU RIVAL ESTÁ LISTO · PULSÁ READY';
+    } else if (!localReady && othersReady) {
+      message = 'LOS DEMÁS ESTÁN LISTOS · PULSÁ READY';
       kind = 'idle';
     } else {
-      message = 'AMBOS EN EL LOBBY · PULSÁ READY';
+      message = 'LOBBY COMPLETO · PULSÁ READY';
       kind = 'idle';
     }
     this._setStatus(message, kind);
   }
 
   _renderSlot(role, data, isYou) {
-    const slot = this._refs[role === 'host' ? 'slotHost' : 'slotGuest'];
-    const name = this._refs[role === 'host' ? 'hostName' : 'guestName'];
-    const state = this._refs[role === 'host' ? 'hostReady' : 'guestReady'];
-    const you = this._refs[role === 'host' ? 'hostYou' : 'guestYou'];
+    const refs = role === 'host'
+      ? ['slotHost', 'hostName', 'hostReady', 'hostYou']
+      : role === 'guest'
+        ? ['slotGuest', 'guestName', 'guestReady', 'guestYou']
+        : role === 'player3'
+          ? ['slotPlayer3', 'player3Name', 'player3Ready', 'player3You']
+          : ['slotPlayer4', 'player4Name', 'player4Ready', 'player4You'];
+    const [slotRef, nameRef, stateRef, youRef] = refs;
+    const slot = this._refs[slotRef];
+    const name = this._refs[nameRef];
+    const state = this._refs[stateRef];
+    const you = this._refs[youRef];
     const connected = !!(data && (data.connected !== false));
     const hasData = !!data && connected;
     if (slot) {
@@ -1169,8 +1299,7 @@ export class OnlineUI {
       this._readyLockTimer = null;
       if (this._screen === 'lobby') this._releaseLock();
     }, 1600);
-    const role = this._roleNow() || this._role;
-    const local = role && this._lobby ? this._lobby[role] : null;
+    const local = this._localLobbyPlayer(this._lobby);
     const next = !(local && local.ready);
     try {
       session.setReady(next);
@@ -1179,12 +1308,15 @@ export class OnlineUI {
       return;
     }
     // Refresco optimista mientras llega el lobby actualizado.
-    if (this._lobby && role && (role === 'host' || role === 'guest')) {
-      const current = this._lobby[role] || { name: this._myName, connected: true };
-      this._lobby = {
-        ...this._lobby,
-        [role]: { ...current, ready: next },
-      };
+    if (this._lobby && local) {
+      local.ready = next;
+      if (local.id && this._lobby.roster?.[local.id]) this._lobby.roster[local.id].ready = next;
+      if (Array.isArray(this._lobby.players)) {
+        const current = this._lobby.players.find((player) => player?.id === local.id);
+        if (current) current.ready = next;
+      }
+      if (this._lobby.host?.id === local.id) this._lobby.host.ready = next;
+      if (this._lobby.guest?.id === local.id) this._lobby.guest.ready = next;
       this._renderLobby();
     }
   }
@@ -1273,8 +1405,17 @@ export class OnlineUI {
     this._addMatchClass();
     const refs = this._hudRefs;
     const lobbyNames = this._lobbyNames();
-    const hostName = String((hud.names && hud.names.host) || lobbyNames.host || 'HOST');
-    const guestName = String((hud.names && hud.names.guest) || lobbyNames.guest || 'GUEST');
+    const players = Array.isArray(hud.players) ? hud.players : [];
+    const teamMode = hud.mode === '2v2' || players.length > 2;
+    const hostTeam = players.find((player) => player?.isHost)?.team === 'T' ? 'T' : 'CT';
+    const guestTeam = hostTeam === 'CT' ? 'T' : 'CT';
+    const localTeam = hud.team === 'T' ? 'T' : hud.team === 'CT' ? 'CT' : null;
+    const hostName = teamMode
+      ? `${hostTeam} TEAM`
+      : String((hud.names && hud.names.host) || lobbyNames.host || 'HOST');
+    const guestName = teamMode
+      ? `${guestTeam} TEAM`
+      : String((hud.names && hud.names.guest) || lobbyNames.guest || 'GUEST');
     const scores = this._resolveScores(hud, { host: 0, guest: 0 });
     this._setHudText('hostName', hostName);
     this._setHudText('guestName', guestName);
@@ -1314,12 +1455,15 @@ export class OnlineUI {
       if (show) this._setHudText('respawn', text);
     }
 
+    const localSide = teamMode && localTeam
+      ? localTeam === hostTeam ? 'host' : 'guest'
+      : this._role;
     if (this._onlineHud) {
-      this._onlineHud.classList.toggle('is-host', this._role === 'host');
-      this._onlineHud.classList.toggle('is-guest', this._role === 'guest');
+      this._onlineHud.classList.toggle('is-host', localSide === 'host');
+      this._onlineHud.classList.toggle('is-guest', localSide === 'guest');
     }
-    if (this._hudRefs.hostYou) this._hudRefs.hostYou.classList.toggle('online-hidden', this._role !== 'host');
-    if (this._hudRefs.guestYou) this._hudRefs.guestYou.classList.toggle('online-hidden', this._role !== 'guest');
+    if (this._hudRefs.hostYou) this._hudRefs.hostYou.classList.toggle('online-hidden', localSide !== 'host');
+    if (this._hudRefs.guestYou) this._hudRefs.guestYou.classList.toggle('online-hidden', localSide !== 'guest');
 
     this._showOnlineHud();
   }
@@ -1373,9 +1517,13 @@ export class OnlineUI {
     else this._role = this._roleNow() || this._role;
 
     const lobbyNames = this._lobbyNames();
+    const endPlayers = Array.isArray(payload.players) ? payload.players : [];
+    const teamMode = payload.mode === '2v2' || Number(payload.maxPlayers ?? this._lobby?.maxPlayers) === 4;
+    const hostTeam = endPlayers.find((player) => player?.isHost)?.team === 'T' ? 'T' : 'CT';
+    const guestTeam = hostTeam === 'CT' ? 'T' : 'CT';
     const names = {
-      host: String((payload.names && payload.names.host) || lobbyNames.host || 'HOST'),
-      guest: String((payload.names && payload.names.guest) || lobbyNames.guest || 'GUEST'),
+      host: teamMode ? `${hostTeam} TEAM` : String((payload.names && payload.names.host) || lobbyNames.host || 'HOST'),
+      guest: teamMode ? `${guestTeam} TEAM` : String((payload.names && payload.names.guest) || lobbyNames.guest || 'GUEST'),
     };
     const scores = this._resolveScores(payload, this._hudScore());
     const scoreHost = scores.host;
@@ -1391,7 +1539,10 @@ export class OnlineUI {
           : null;
 
     const kicker = this._refs.endKicker;
-    if (kicker) kicker.textContent = 'ONLINE 1V1 · FIN DE PARTIDA';
+    if (kicker) {
+      const maxPlayers = teamMode ? 4 : 2;
+      kicker.textContent = `ONLINE ${maxPlayers === 4 ? '2V2' : '1V1'} · FIN DE PARTIDA`;
+    }
 
     const title = this._refs.endTitle;
     if (title) {

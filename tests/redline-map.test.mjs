@@ -4,7 +4,7 @@ import { buildRedlineMap } from '../src/world/redline_map.js';
 import { ONLINE_MAPS, isOnlineMap } from '../src/world/online_map_pool.js';
 import { OnlineMatch } from '../src/online/match.js';
 
-assert.deepEqual(ONLINE_MAPS.map(m => m.id), ['aim_redline', 'aim_1v1', 'cs_assault']);
+assert.deepEqual(ONLINE_MAPS.map(m => m.id), ['aim_redline', 'aim_forge', 'aim_1v1', 'cs_assault']);
 for (const id of ONLINE_MAPS.map(m => m.id)) assert.equal(isOnlineMap(id), true);
 assert.equal(isOnlineMap('unknown'), false);
 

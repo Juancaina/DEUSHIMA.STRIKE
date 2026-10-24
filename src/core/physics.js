@@ -45,6 +45,27 @@ export class PhysicsWorld {
     return null;
   }
 
+  canFitBody(body, height = body?.height ?? 1.8, epsilon = 0.001) {
+    if (!body?.pos) return false;
+    const r = body.radius ?? 0.38;
+    _test.min.set(body.pos.x - r, body.pos.y, body.pos.z - r);
+    _test.max.set(body.pos.x + r, body.pos.y + height, body.pos.z + r);
+    return !this.overlapsWorld(_test, epsilon);
+  }
+
+  hasGroundBelow(body, offsetX = 0, offsetZ = 0, drop = 0.85) {
+    if (!body?.pos) return false;
+    const x = body.pos.x + offsetX;
+    const z = body.pos.z + offsetZ;
+    const top = body.pos.y + 0.04;
+    const bottom = body.pos.y - Math.max(0.01, Number(drop) || 0.85);
+    for (const c of this.colliders) {
+      if (x < c.min.x || x > c.max.x || z < c.min.z || z > c.max.z) continue;
+      if (c.max.y <= top && c.max.y >= bottom) return true;
+    }
+    return false;
+  }
+
   _collisionBoxAt(body, px, py, pz) {
     const r = body.radius ?? 0.38;
     const h = body.height ?? 1.8;
@@ -85,6 +106,7 @@ export class PhysicsWorld {
   }
 
   moveBody(body, dt) {
+    const startedGrounded = !!body.onGround;
     const vx = body.vel.x * dt;
     const vy = body.vel.y * dt;
     const vz = body.vel.z * dt;
@@ -95,6 +117,7 @@ export class PhysicsWorld {
     const sz = vz / steps;
     body.stepped = false;
     body.onGround = false;
+    let landedDuringMove = false;
 
     for (let i = 0; i < steps; i++) {
       // Vertical first, so we can land before attempting step-up.
@@ -107,6 +130,7 @@ export class PhysicsWorld {
           if (sy < 0) {
             body.pos.y = hit.max.y + 0.001;
             body.onGround = true;
+            landedDuringMove = true;
             body.vel.y = 0;
           } else {
             body.pos.y = hit.min.y - (body.height ?? 1.8) - 0.001;
@@ -116,8 +140,14 @@ export class PhysicsWorld {
         }
       }
 
+      // A grounded body with zero vertical displacement still needs its prior
+      // support state while resolving horizontal step-up. We clear it again
+      // afterwards unless an actual step/landing established new support.
+      const borrowedGround = startedGrounded && !body.onGround && Math.abs(sy) <= 1e-9;
+      if (borrowedGround) body.onGround = true;
       this._horizontalAxis(body, 'x', sx);
       this._horizontalAxis(body, 'z', sz);
+      if (borrowedGround && !body.stepped && !landedDuringMove) body.onGround = false;
 
       // If we stepped up, cancel the remaining downward movement for this tick.
       if (body.stepped) {

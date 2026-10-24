@@ -1,5 +1,5 @@
 ﻿/**
- * OnlineSession â€” lobby PeerJS host-autoritativo para el modo Online 1v1 de CS16.
+ * OnlineSession â€” lobby PeerJS host-autoritativo para salas Online de 2 o 4 jugadores.
  *
  * Protocolo (PeerJS DataConnection, serializaciÃ³n JSON):
  *   Control interno (plano):
@@ -24,7 +24,8 @@ const CODE_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ23456789';
 const CODE_LENGTH = 5;
 const CODE_RE = /^[A-Z2-9]{5}$/;
 const PEER_PREFIX = 'cs16aim';
-const MODE = '1v1';
+const MODE_1V1 = '1v1';
+const MODE_2V2 = '2v2';
 import { DEFAULT_ONLINE_MAP, isOnlineMap } from '../world/online_map_pool.js';
 const TARGET_KILLS = 13;
 const HOST_CODE_RETRIES = 5;
@@ -34,6 +35,28 @@ const LOBBY_TIMEOUT_MS = 15000;
 const START_DELAY_MS = 500;
 const COUNTDOWN_MS = 1500;
 const MAX_NAME_LENGTH = 16;
+const RECONNECT_GRACE_MS = 10000;
+const RECONNECT_ATTEMPT_MS = 2500;
+const VALID_MAX_PLAYERS = new Set([2, 4]);
+const HOST_AUTH_MATCH_TYPES = new Set([
+  'snapshot',
+  'shotFx',
+  'damage',
+  'hitConfirm',
+  'playerHit',
+  'kill',
+  'roundEnd',
+  'roundStart',
+  'matchEnd',
+  'weaponDropAdd',
+  'weaponDropRemove',
+  'weaponDropAccepted',
+  'weaponDropsReset',
+  'weaponPickupGranted',
+  'playerSync',
+  'playerDisconnected',
+  'playerReconnected',
+]);
 
 /** STUN pÃºblicos (Google + Twilio). Sin TURN propio: redes muy restrictivas pueden fallar. */
 const ICE_SERVERS = [
@@ -99,6 +122,66 @@ function randomCode() {
   return code;
 }
 
+function randomPlayerId() {
+  const bytes = new Uint8Array(12);
+  const cryptoObj = typeof globalThis !== 'undefined' ? globalThis.crypto : null;
+  if (cryptoObj && typeof cryptoObj.getRandomValues === 'function') {
+    cryptoObj.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  return `p_${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function normalizePlayerId(value) {
+  const id = String(value == null ? '' : value).trim();
+  return /^[A-Za-z0-9_-]{6,80}$/.test(id) ? id : '';
+}
+
+function normalizeMaxPlayers(value, fallback = 2) {
+  const n = Number(value);
+  return VALID_MAX_PLAYERS.has(n) ? n : fallback;
+}
+
+function teamForSlot(slot) {
+  return Number(slot) % 2 === 0 ? 'CT' : 'T';
+}
+
+function copyPlayer(player) {
+  if (!player) return null;
+  return {
+    id: player.id,
+    name: player.name,
+    team: player.team,
+    slot: player.slot,
+    ready: !!player.ready,
+    connected: player.connected !== false,
+    isHost: !!player.isHost,
+  };
+}
+
+function sortedPlayersFromRoster(roster) {
+  return Object.values(roster || {})
+    .filter(Boolean)
+    .sort((a, b) => Number(a.slot) - Number(b.slot))
+    .map(copyPlayer);
+}
+
+function balancedSpawnRolls(players) {
+  const rolls = {};
+  for (const team of ['CT', 'T']) {
+    const teammates = (players || [])
+      .filter((player) => player?.team === team)
+      .sort((a, b) => Number(a.slot) - Number(b.slot));
+    if (!teammates.length) continue;
+    const offset = Math.random();
+    teammates.forEach((player, index) => {
+      rolls[player.id] = (index + offset) / teammates.length;
+    });
+  }
+  return rolls;
+}
+
 function makeLink(code) {
   const loc = typeof globalThis !== 'undefined' ? globalThis.location : null;
   if (!loc || !loc.origin) return '';
@@ -106,26 +189,79 @@ function makeLink(code) {
   return `${loc.origin}${path}${path.includes('?') ? '&' : '?'}join=${code}`;
 }
 
-function makeLobby(code, hostName, guest) {
+function makeLobby(code, hostName, hostId, maxPlayers = 2) {
+  const playerId = normalizePlayerId(hostId) || randomPlayerId();
+  const host = {
+    id: playerId,
+    name: sanitizeName(hostName),
+    team: 'CT',
+    slot: 0,
+    ready: false,
+    connected: true,
+    isHost: true,
+  };
+  const roster = { [playerId]: host };
   return {
     code,
-    mode: MODE,
+    mode: normalizeMaxPlayers(maxPlayers) === 4 ? MODE_2V2 : MODE_1V1,
+    maxPlayers: normalizeMaxPlayers(maxPlayers),
     map: DEFAULT_ONLINE_MAP,
     targetKills: TARGET_KILLS,
-    host: { name: hostName, ready: false, connected: true },
-    guest: guest
-      ? { name: guest.name, ready: !!guest.ready, connected: true }
-      : null,
+    hostId: playerId,
+    roster,
+    players: [copyPlayer(host)],
+    host: copyPlayer(host),
+    guest: null,
   };
+}
+
+function syncLobbyCompat(lobby) {
+  if (!lobby) return lobby;
+  if (!lobby.roster || typeof lobby.roster !== 'object') {
+    const roster = {};
+    const source = Array.isArray(lobby.players) && lobby.players.length
+      ? lobby.players
+      : [lobby.host, lobby.guest].filter(Boolean);
+    source.forEach((raw, index) => {
+      const fallbackId = index === 0 ? (lobby.hostId || 'legacy_host') : `legacy_guest_${index}`;
+      const id = normalizePlayerId(raw?.id) || normalizePlayerId(fallbackId) || randomPlayerId();
+      const slot = Number.isInteger(raw?.slot) ? raw.slot : index;
+      roster[id] = {
+        id,
+        name: sanitizeName(raw?.name),
+        team: raw?.team === 'T' ? 'T' : raw?.team === 'CT' ? 'CT' : teamForSlot(slot),
+        slot,
+        ready: !!raw?.ready,
+        connected: raw?.connected !== false,
+        isHost: !!raw?.isHost || slot === 0,
+      };
+    });
+    lobby.roster = roster;
+  }
+  const players = sortedPlayersFromRoster(lobby.roster);
+  lobby.players = players;
+  lobby.maxPlayers = normalizeMaxPlayers(lobby.maxPlayers);
+  lobby.mode = lobby.maxPlayers === 4 ? MODE_2V2 : MODE_1V1;
+  lobby.host = players.find((player) => player.isHost || player.slot === 0) || null;
+  lobby.guest = players.find((player) => player.slot === 1) || null;
+  lobby.hostId = lobby.host ? lobby.host.id : lobby.hostId || null;
+  return lobby;
 }
 
 function copyLobby(lobby) {
   if (!lobby) return null;
+  syncLobbyCompat(lobby);
+  const roster = {};
+  for (const player of lobby.players || []) roster[player.id] = copyPlayer(player);
   return {
     code: lobby.code,
     mode: lobby.mode,
+    maxPlayers: normalizeMaxPlayers(lobby.maxPlayers),
     map: lobby.map,
     targetKills: lobby.targetKills,
+    hostId: lobby.hostId || null,
+    roster,
+    players: (lobby.players || []).map(copyPlayer),
     host: lobby.host ? { ...lobby.host } : null,
     guest: lobby.guest ? { ...lobby.guest } : null,
   };
@@ -146,9 +282,18 @@ export class OnlineSession {
     this._peer = null;
     this._conn = null;
     this._connOpen = false;
+    this._connections = new Map();
+    this._connPlayers = new Map();
+    this._pendingConnections = new Set();
+    this._reconnectTimers = new Map();
+    this._guestReconnectTimer = null;
+    this._guestReconnectDeadline = 0;
+    this._guestReconnectInFlight = false;
     this._role = null;
     this._code = null;
     this._name = '';
+    this._playerId = null;
+    this._maxPlayers = 2;
     this._guestName = '';
     this._hostName = '';
     this._remoteName = '';
@@ -188,7 +333,25 @@ export class OnlineSession {
     return this._lobby;
   }
 
+  get localPlayerId() {
+    return this._playerId;
+  }
+
+  get players() {
+    return this._lobby ? (copyLobby(this._lobby).players || []) : [];
+  }
+
+  get maxPlayers() {
+    return this._lobby ? normalizeMaxPlayers(this._lobby.maxPlayers) : this._maxPlayers;
+  }
+
   get connected() {
+    if (this._role === 'host') {
+      for (const conn of this._connections.values()) {
+        if (conn && conn.open === true) return true;
+      }
+      return false;
+    }
     return !!this._conn && (this._connOpen || this._conn.open === true);
   }
 
@@ -218,12 +381,14 @@ export class OnlineSession {
    * `unavailable-id`.
    * @returns {Promise<{code:string, link:string}>}
    */
-  async host(name) {
+  async host(name, options = {}) {
     if (this._role) throw new Error('Ya estÃ¡s en una sala');
     this._prepareSession();
     this._role = 'host';
     this._name = sanitizeName(name);
     this._hostName = this._name;
+    this._playerId = randomPlayerId();
+    this._maxPlayers = normalizeMaxPlayers(options && options.maxPlayers, 2);
     this._status('creating', 'Creando sala...');
 
     let lastError = null;
@@ -263,7 +428,7 @@ export class OnlineSession {
     }
 
     this._attachPeerEvents();
-    this._lobby = makeLobby(this._code, this._name, null);
+    this._lobby = makeLobby(this._code, this._name, this._playerId, this._maxPlayers);
     this._status(
       'waiting',
       `Sala ${this._code} creada. Esperando a tu amigo...`,
@@ -294,6 +459,7 @@ export class OnlineSession {
     this._role = 'guest';
     this._code = cleanCode;
     this._name = sanitizeName(name);
+    this._playerId = randomPlayerId();
     this._guestName = this._name;
 
     this._status('creating', 'Conectando...');
@@ -330,7 +496,7 @@ export class OnlineSession {
     this._connOpen = true;
     this._bindConn(conn);
     this._status('connecting', 'Conectado. Esperando al host...');
-    this._sendRaw({ t: 'hello', name: this._name });
+    this._sendRaw({ t: 'hello', name: this._name, playerId: this._playerId });
 
     try {
       await this._waitLobby();
@@ -355,20 +521,46 @@ export class OnlineSession {
 
   /** Marca/desmarca READY. Host: actualiza y difunde. Guest: avisa al host. */
   setReady(value) {
+    if (this._started) return false;
     const ready = !!value;
     if (this._role === 'host') {
-      if (!this._lobby || !this._lobby.host) return;
-      this._lobby.host.ready = ready;
+      const local = this._localLobbyPlayer();
+      if (!local) return false;
+      local.ready = ready;
+      syncLobbyCompat(this._lobby);
       this._broadcastLobby();
       this._maybeStart();
-      return;
+      return true;
     }
     if (this._role === 'guest') {
-      if (!this._lobby || !this._lobby.guest) return;
-      this._lobby.guest.ready = ready;
-      this._sendRaw({ t: 'ready', ready });
+      const local = this._localLobbyPlayer();
+      if (!local) return false;
+      local.ready = ready;
+      syncLobbyCompat(this._lobby);
+      this._sendRaw({ t: 'ready', ready, playerId: this._playerId });
       this._emitLobby();
+      return true;
     }
+    return false;
+  }
+
+  /** Host chooses whether the room is legacy 1v1 (2) or 2v2 (4). */
+  setMaxPlayers(value) {
+    if (this._role !== 'host' || !this._lobby || this._started) return false;
+    const next = normalizeMaxPlayers(value, 0);
+    if (!next) return false;
+    const players = sortedPlayersFromRoster(this._lobby.roster);
+    if (players.length > next) return false;
+    if (this._lobby.maxPlayers === next) return true;
+    this._cancelStartTimer();
+    this._lobby.maxPlayers = next;
+    this._maxPlayers = next;
+    for (const player of Object.values(this._lobby.roster || {})) {
+      if (player) player.ready = false;
+    }
+    syncLobbyCompat(this._lobby);
+    this._broadcastLobby();
+    return true;
   }
 
   /** Host chooses the arena before both players ready up. Broadcast is authoritative. */
@@ -377,22 +569,26 @@ export class OnlineSession {
     if (this._lobby.map === mapId) return true;
     this._cancelStartTimer();
     this._lobby.map = mapId;
-    this._lobby.host.ready = false;
-    if (this._lobby.guest) this._lobby.guest.ready = false;
+    for (const player of Object.values(this._lobby.roster || {})) {
+      if (player) player.ready = false;
+    }
+    syncLobbyCompat(this._lobby);
     this._broadcastLobby();
     return true;
   }
 
-  /** Solo host: vuelve al lobby (ready=false) y avisa a ambos. */
+  /** Solo host: vuelve al lobby (ready=false) y avisa a todos. */
   resetToLobby() {
     if (this._role !== 'host' || !this._lobby) return false;
     this._cancelStartTimer();
     this._started = false;
-    this._lobby.host.ready = false;
-    if (this._lobby.guest) this._lobby.guest.ready = false;
-    this._sendRaw({ t: 'restartLobby' });
+    for (const player of Object.values(this._lobby.roster || {})) {
+      if (player) player.ready = false;
+    }
+    syncLobbyCompat(this._lobby);
+    this._broadcastRaw({ t: 'restartLobby' });
     this._broadcastLobby();
-    this._status('connected', 'En el lobby. Esperando que ambos estÃ©n listos...');
+    this._status('connected', 'En el lobby. Esperando que todos estÃ©n listos...');
     return true;
   }
 
@@ -401,18 +597,54 @@ export class OnlineSession {
   /* ====================================================================== */
 
   /** Mensaje de partida al otro peer. Devuelve false si no hay conexiÃ³n. */
-  send(type, payload) {
-    if (!type || !this._conn || !this.connected) return false;
+  send(type, payload, targetId = null) {
+    if (!type) return false;
+    if (targetId) return this.sendTo(targetId, type, payload);
     const envelope = {
       t: String(type),
       p: payload && typeof payload === 'object' ? payload : {},
     };
-    try {
-      this._conn.send(envelope);
-      return true;
-    } catch {
-      return false;
+    if (this._role === 'host') {
+      const legacyGuest = this._legacyGuestPlayer();
+      return legacyGuest ? this._sendObjectTo(legacyGuest.id, envelope) : false;
     }
+    return this._sendRaw(envelope);
+  }
+
+  /** Envía un mensaje de partida a un playerId concreto. */
+  sendTo(playerId, type, payload) {
+    const targetId = normalizePlayerId(playerId);
+    if (!targetId || !type || targetId === this._playerId) return false;
+    const envelope = {
+      t: String(type),
+      p: payload && typeof payload === 'object' ? payload : {},
+    };
+    if (this._role === 'host') return this._sendObjectTo(targetId, envelope);
+    const hostId = this._lobby?.hostId || this._lobby?.host?.id || '';
+    if (!hostId || targetId !== hostId) return false;
+    return this._sendRaw(envelope);
+  }
+
+  /** Guest: atajo explícito al host autoritativo. */
+  sendToHost(type, payload) {
+    if (this._role !== 'guest') return false;
+    return this.send(type, payload);
+  }
+
+  /** Host: difunde un mensaje de partida a todos los guests conectados. */
+  broadcast(type, payload, exceptId = null) {
+    if (this._role !== 'host' || !type) return false;
+    const envelope = {
+      t: String(type),
+      p: payload && typeof payload === 'object' ? payload : {},
+    };
+    const skipped = normalizePlayerId(exceptId);
+    let sent = 0;
+    for (const [playerId] of this._connections) {
+      if (skipped && playerId === skipped) continue;
+      if (this._sendObjectTo(playerId, envelope)) sent++;
+    }
+    return sent;
   }
 
   /* ====================================================================== */
@@ -424,10 +656,13 @@ export class OnlineSession {
     this._closed = true;
     this._closing = true;
     this._clearTimers();
-    const conn = this._conn;
+    const conns = this._allConnections();
     this._conn = null;
     this._connOpen = false;
-    if (conn) {
+    this._connections.clear();
+    this._connPlayers.clear();
+    this._pendingConnections.clear();
+    for (const conn of conns) {
       try {
         conn.close();
       } catch {
@@ -450,6 +685,13 @@ export class OnlineSession {
     this._teardownPeer();
     this._conn = null;
     this._connOpen = false;
+    this._connections.clear();
+    this._connPlayers.clear();
+    this._pendingConnections.clear();
+    this._reconnectTimers.clear();
+    this._guestReconnectTimer = null;
+    this._guestReconnectDeadline = 0;
+    this._guestReconnectInFlight = false;
     this._resetFields();
     this._closed = false;
     this._closing = false;
@@ -460,9 +702,18 @@ export class OnlineSession {
     this._clearTimers();
     this._conn = null;
     this._connOpen = false;
+    this._connections.clear();
+    this._connPlayers.clear();
+    this._pendingConnections.clear();
+    this._reconnectTimers.clear();
+    this._guestReconnectTimer = null;
+    this._guestReconnectDeadline = 0;
+    this._guestReconnectInFlight = false;
     this._role = null;
     this._code = null;
     this._name = '';
+    this._playerId = null;
+    this._maxPlayers = 2;
     this._guestName = '';
     this._hostName = '';
     this._remoteName = '';
@@ -627,11 +878,11 @@ export class OnlineSession {
     return this._peer.connect(hostPeerId, {
       serialization: 'json',
       reliable: true,
-      metadata: { name: this._name },
+      metadata: { name: this._name, playerId: this._playerId },
     });
   }
 
-  _connectToHost(hostPeerId) {
+  _connectToHost(hostPeerId, timeoutMs = CONNECT_TIMEOUT_MS, trackJoinReject = true) {
     return new Promise((resolve, reject) => {
       let settled = false;
       let conn;
@@ -646,15 +897,15 @@ export class OnlineSession {
           reject,
           new Error('Tiempo de espera agotado. No se encontrÃ³ la sala. VerificÃ¡ el cÃ³digo.'),
         );
-      }, CONNECT_TIMEOUT_MS);
+      }, timeoutMs);
       const finish = (fn, value) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        this._joinReject = null;
+        if (trackJoinReject) this._joinReject = null;
         fn(value);
       };
-      this._joinReject = (message) => finish(reject, new Error(message));
+      if (trackJoinReject) this._joinReject = (message) => finish(reject, new Error(message));
       try {
         conn.on('open', () => finish(resolve, conn));
         conn.on('error', (err) => {
@@ -725,6 +976,78 @@ export class OnlineSession {
   /* Internos: conexiones                                                   */
   /* ====================================================================== */
 
+  _allConnections() {
+    const all = new Set();
+    if (this._conn) all.add(this._conn);
+    for (const conn of this._connections.values()) if (conn) all.add(conn);
+    for (const conn of this._pendingConnections) if (conn) all.add(conn);
+    return [...all];
+  }
+
+  _localLobbyPlayer() {
+    if (!this._lobby || !this._playerId) return null;
+    return this._lobby.roster?.[this._playerId] || null;
+  }
+
+  _legacyGuestPlayer() {
+    if (!this._lobby) return null;
+    return sortedPlayersFromRoster(this._lobby.roster).find((player) => player.slot === 1) || null;
+  }
+
+  _nextOpenSlot() {
+    if (!this._lobby) return -1;
+    const occupied = new Set(
+      sortedPlayersFromRoster(this._lobby.roster).map((player) => Number(player.slot)),
+    );
+    const maxPlayers = normalizeMaxPlayers(this._lobby.maxPlayers);
+    for (let slot = 1; slot < maxPlayers; slot++) {
+      if (!occupied.has(slot)) return slot;
+    }
+    return -1;
+  }
+
+  _syncLegacyConnection() {
+    if (this._role !== 'host') return;
+    const guest = this._legacyGuestPlayer();
+    const conn = guest ? this._connections.get(guest.id) || null : null;
+    this._conn = conn;
+    this._connOpen = !!conn && conn.open === true;
+    this._guestName = guest?.name || '';
+    this._remoteName = this._guestName;
+  }
+
+  _sendRawToConn(conn, obj) {
+    if (!conn || conn.open !== true) return false;
+    try {
+      conn.send(obj);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  _sendObjectTo(playerId, obj) {
+    const targetId = normalizePlayerId(playerId);
+    if (!targetId) return false;
+    if (this._role === 'host') {
+      return this._sendRawToConn(this._connections.get(targetId), obj);
+    }
+    const hostId = this._lobby?.hostId || this._lobby?.host?.id || '';
+    if (targetId !== hostId) return false;
+    return this._sendRawToConn(this._conn, obj);
+  }
+
+  _broadcastRaw(obj, exceptId = null) {
+    if (this._role !== 'host') return 0;
+    const skipped = normalizePlayerId(exceptId);
+    let sent = 0;
+    for (const [playerId, conn] of this._connections) {
+      if (skipped && playerId === skipped) continue;
+      if (this._sendRawToConn(conn, obj)) sent++;
+    }
+    return sent;
+  }
+
   _onIncomingConnection(conn) {
     if (this._closing || this._closed) {
       try {
@@ -734,16 +1057,21 @@ export class OnlineSession {
       }
       return;
     }
-    if (this._conn) {
+    if (!conn) return;
+    const hintedId = normalizePlayerId(conn.metadata?.playerId);
+    const known = hintedId && this._lobby?.roster?.[hintedId];
+    if (this._started && !known) {
       this._rejectFull(conn);
       return;
     }
-    this._conn = conn;
-    this._connOpen = conn.open === true;
+    if (!known && this._pendingConnections.size >= Math.max(2, this.maxPlayers)) {
+      this._rejectFull(conn);
+      return;
+    }
+    this._pendingConnections.add(conn);
     this._bindConn(conn);
     const onOpen = () => {
-      if (this._conn !== conn || this._closing) return;
-      this._connOpen = true;
+      if (this._closing || this._closed || !this._pendingConnections.has(conn)) return;
       if (!this._started) {
         this._status('connected', 'Jugador conectado. Esperando datos...');
       }
@@ -755,7 +1083,13 @@ export class OnlineSession {
   _rejectFull(conn) {
     const sendFull = () => {
       try {
-        conn.send({ t: 'full' });
+        conn.send({
+          t: 'full',
+          maxPlayers: this.maxPlayers,
+          message: this._started
+            ? 'La partida ya empezÃ³.'
+            : `La sala estÃ¡ llena (mÃ¡ximo ${this.maxPlayers} jugadores).`,
+        });
       } catch {
         /* ignore */
       }
@@ -778,31 +1112,129 @@ export class OnlineSession {
   }
 
   _bindConn(conn) {
-    conn.on('data', (data) => this._onData(data));
+    conn.on('data', (data) => this._onData(data, conn));
     conn.on('close', () => this._onConnClose(conn));
     conn.on('error', (err) => this._onConnError(conn, err));
   }
 
   _onConnClose(conn) {
-    if (conn !== this._conn) return;
-    this._conn = null;
-    this._connOpen = false;
-    this._cancelStartTimer();
+    this._pendingConnections.delete(conn);
     if (this._closing || this._closed) return;
-    if (this._started) {
-      this._started = false;
-      this._emitClosed('El otro jugador se desconectÃ³.');
+
+    if (this._role === 'guest') {
+      if (conn !== this._conn) return;
+      this._conn = null;
+      this._connOpen = false;
+      const local = this._localLobbyPlayer();
+      if (local) local.connected = false;
+      this._beginGuestReconnect();
       return;
     }
-    if (this._role === 'host') {
-      this._guestName = '';
-      this._remoteName = '';
-      this._lobby = makeLobby(this._code, this._name, null);
-      this._status('waiting', 'El jugador se desconectÃ³. Esperando a alguien mÃ¡s...');
-      this._emitLobby();
+
+    if (this._role !== 'host') return;
+    const playerId = this._connPlayers.get(conn);
+    this._connPlayers.delete(conn);
+    if (!playerId) return;
+    if (this._connections.get(playerId) !== conn) return;
+    this._connections.delete(playerId);
+    const player = this._lobby?.roster?.[playerId];
+    if (!player || player.isHost) return;
+    player.connected = false;
+    player.ready = false;
+    this._cancelStartTimer();
+    syncLobbyCompat(this._lobby);
+    this._syncLegacyConnection();
+
+    if (!this._started) {
+      this._status('waiting', `${player.name} se desconectÃ³. Esperando reconexiÃ³n...`);
+      this._broadcastLobby();
+    }
+    this._schedulePlayerExpiry(playerId);
+  }
+
+  _schedulePlayerExpiry(playerId) {
+    const prior = this._reconnectTimers.get(playerId);
+    if (prior) {
+      clearTimeout(prior);
+      this._timers.delete(prior);
+    }
+    const timer = this._setTimer(() => {
+      this._reconnectTimers.delete(playerId);
+      const player = this._lobby?.roster?.[playerId];
+      if (!player || player.connected) return;
+      delete this._lobby.roster[playerId];
+      syncLobbyCompat(this._lobby);
+      this._syncLegacyConnection();
+      if (this._started) {
+        const payload = { playerId, name: player.name, team: player.team, slot: player.slot };
+        this.broadcast('playerDisconnected', payload);
+        this._emitMatch('playerDisconnected', payload, playerId);
+        if (this.maxPlayers === 2) {
+          this._started = false;
+          this._emitClosed('El otro jugador se desconectÃ³.');
+        }
+      } else {
+        this._status('waiting', 'Jugador desconectado. Esperando a alguien mÃ¡s...');
+        this._broadcastLobby();
+      }
+    }, RECONNECT_GRACE_MS);
+    this._reconnectTimers.set(playerId, timer);
+  }
+
+  _beginGuestReconnect() {
+    if (this._closing || this._closed || this._role !== 'guest') return;
+    if (!this._peer || !this._code) {
+      this._emitClosed('Se perdiÃ³ la conexiÃ³n con el host.');
       return;
     }
-    this._emitClosed('Se perdiÃ³ la conexiÃ³n con el host.');
+    if (!this._guestReconnectDeadline) {
+      this._guestReconnectDeadline = Date.now() + RECONNECT_GRACE_MS;
+    }
+    this._status('connecting', 'Se perdiÃ³ la conexiÃ³n con el host. Reconectando...');
+    this._attemptGuestReconnect();
+  }
+
+  async _attemptGuestReconnect() {
+    if (this._guestReconnectInFlight || this._closing || this._closed || this._role !== 'guest') return;
+    const remaining = this._guestReconnectDeadline - Date.now();
+    if (remaining <= 0) {
+      this._guestReconnectDeadline = 0;
+      this._emitClosed('Se perdiÃ³ la conexiÃ³n con el host.');
+      return;
+    }
+    this._guestReconnectInFlight = true;
+    try {
+      const conn = await this._connectToHost(
+        PEER_PREFIX + this._code,
+        Math.min(RECONNECT_ATTEMPT_MS, remaining),
+        false,
+      );
+      if (this._closing || this._closed || this._role !== 'guest') {
+        try { conn.close(); } catch { /* ignore */ }
+        return;
+      }
+      this._conn = conn;
+      this._connOpen = true;
+      this._bindConn(conn);
+      this._guestReconnectDeadline = 0;
+      this._guestReconnectTimer = null;
+      this._sendRaw({ t: 'hello', name: this._name, playerId: this._playerId, reconnect: true });
+      this._status('connected', 'Reconectado con el host.');
+    } catch {
+      if (this._closing || this._closed || this._role !== 'guest') return;
+      const delay = Math.min(700, Math.max(0, this._guestReconnectDeadline - Date.now()));
+      if (delay <= 0) {
+        this._guestReconnectDeadline = 0;
+        this._emitClosed('Se perdiÃ³ la conexiÃ³n con el host.');
+        return;
+      }
+      this._guestReconnectTimer = this._setTimer(() => {
+        this._guestReconnectTimer = null;
+        this._attemptGuestReconnect();
+      }, delay);
+    } finally {
+      this._guestReconnectInFlight = false;
+    }
   }
 
   _onConnError(conn, err) {
@@ -817,16 +1249,14 @@ export class OnlineSession {
   /* ====================================================================== */
 
   _sendRaw(obj) {
-    if (!this._conn || !this.connected) return false;
-    try {
-      this._conn.send(obj);
-      return true;
-    } catch {
-      return false;
+    if (this._role === 'host') {
+      const guest = this._legacyGuestPlayer();
+      return guest ? this._sendObjectTo(guest.id, obj) : false;
     }
+    return this._sendRawToConn(this._conn, obj);
   }
 
-  _onData(raw) {
+  _onData(raw, conn = null) {
     if (this._closing || this._closed) return;
     let msg = raw;
     if (typeof raw === 'string') {
@@ -839,20 +1269,25 @@ export class OnlineSession {
     if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string') return;
     const type = msg.t;
 
-    if (type === 'hello') return this._onHello(msg);
+    if (type === 'hello') return this._onHello(msg, conn);
     if (type === 'lobby') return this._onLobbyMessage(msg);
-    if (type === 'ready') return this._onReadyMessage(msg);
+    if (type === 'ready') return this._onReadyMessage(msg, conn);
     if (type === 'start') return this._onStartMessage(msg);
-    if (type === 'full') return this._onFullMessage();
+    if (type === 'full') return this._onFullMessage(msg);
+    if (type === 'reconnected') return this._onReconnected(msg);
     if (type === 'restartLobby') return this._onRestartLobby();
-    if (type === 'ping') return this._onPing(msg);
+    if (type === 'ping') return this._onPing(msg, conn);
+    const senderId = this._role === 'host'
+      ? this._connPlayers.get(conn) || null
+      : this._lobby?.hostId || this._lobby?.host?.id || null;
+    if (this._role === 'host' && HOST_AUTH_MATCH_TYPES.has(type)) return;
     if (type === 'pong') {
       if (msg.p && typeof msg.p === 'object' && this._started) {
-        this._emitMatch('pong', msg.p);
+        this._emitMatch('pong', msg.p, senderId);
       }
       return;
     }
-    if (this._started) this._emitMatch(type, this._payloadOf(msg));
+    if (this._started) this._emitMatch(type, this._payloadOf(msg), senderId);
   }
 
   _payloadOf(msg) {
@@ -864,22 +1299,84 @@ export class OnlineSession {
     return payload;
   }
 
-  _onHello(msg) {
+  _onHello(msg, conn) {
     if (this._role !== 'host' || !this._lobby) return;
-    if (this._started) return;
+    if (!conn) return;
     const name = sanitizeName(msg.name);
-    this._guestName = name;
-    this._remoteName = name;
-    this._lobby.guest = { name, ready: false, connected: true };
+    const hintedId = normalizePlayerId(msg.playerId) || normalizePlayerId(conn.metadata?.playerId);
+    const playerId = hintedId || normalizePlayerId(conn.peer) || randomPlayerId();
+    let player = this._lobby.roster?.[playerId] || null;
+
+    if (!player) {
+      if (this._started || sortedPlayersFromRoster(this._lobby.roster).length >= this.maxPlayers) {
+        this._pendingConnections.delete(conn);
+        this._rejectFull(conn);
+        return;
+      }
+      const slot = this._nextOpenSlot();
+      if (slot < 0) {
+        this._pendingConnections.delete(conn);
+        this._rejectFull(conn);
+        return;
+      }
+      player = {
+        id: playerId,
+        name,
+        team: teamForSlot(slot),
+        slot,
+        ready: false,
+        connected: true,
+        isHost: false,
+      };
+      this._lobby.roster[playerId] = player;
+    } else {
+      if (player.isHost) {
+        this._pendingConnections.delete(conn);
+        this._rejectFull(conn);
+        return;
+      }
+      player.name = name;
+      player.connected = true;
+      if (!this._started) player.ready = false;
+    }
+
+    const oldConn = this._connections.get(playerId);
+    if (oldConn && oldConn !== conn) {
+      this._connPlayers.delete(oldConn);
+      try { oldConn.close(); } catch { /* ignore */ }
+    }
+    this._pendingConnections.delete(conn);
+    this._connections.set(playerId, conn);
+    this._connPlayers.set(conn, playerId);
+    const expiry = this._reconnectTimers.get(playerId);
+    if (expiry) {
+      clearTimeout(expiry);
+      this._timers.delete(expiry);
+      this._reconnectTimers.delete(playerId);
+    }
+    syncLobbyCompat(this._lobby);
+    this._syncLegacyConnection();
+
+    if (this._started) {
+      this._sendObjectTo(playerId, { t: 'reconnected', playerId });
+      const payload = { playerId, name: player.name, team: player.team, slot: player.slot };
+      this.broadcast('playerReconnected', payload, playerId);
+      this._emitMatch('playerReconnected', payload, playerId);
+      return;
+    }
+
     this._status('connected', `Jugador conectado: ${name}`);
     this._broadcastLobby();
     this._maybeStart();
   }
 
-  _onReadyMessage(msg) {
-    if (this._role !== 'host' || !this._lobby) return;
-    if (!this._lobby.guest) return;
-    this._lobby.guest.ready = !!msg.ready;
+  _onReadyMessage(msg, conn) {
+    if (this._role !== 'host' || !this._lobby || this._started) return;
+    const playerId = this._connPlayers.get(conn);
+    const player = playerId ? this._lobby.roster?.[playerId] : null;
+    if (!player || !player.connected) return;
+    player.ready = !!msg.ready;
+    syncLobbyCompat(this._lobby);
     this._broadcastLobby();
     this._maybeStart();
   }
@@ -893,6 +1390,9 @@ export class OnlineSession {
       return;
     }
     this._lobby = copyLobby(lobby);
+    this._maxPlayers = normalizeMaxPlayers(this._lobby.maxPlayers);
+    const local = this._localLobbyPlayer();
+    if (local) local.connected = true;
     if (this._lobby.host && this._lobby.host.name) this._hostName = this._lobby.host.name;
     this._remoteName = this._hostName;
     this._status(
@@ -910,10 +1410,16 @@ export class OnlineSession {
       this._emitError('El mapa de la partida no coincide con el elegido en la sala.');
       return;
     }
+    if (payload.localPlayerId && payload.localPlayerId !== this._playerId) {
+      this._emitError('La identidad del jugador no coincide con la sala.');
+      return;
+    }
     payload.role = payload.role === 'host' ? 'host' : 'guest';
     if (this._lobby) {
-      if (this._lobby.host) this._lobby.host.ready = true;
-      if (this._lobby.guest) this._lobby.guest.ready = true;
+      for (const player of Object.values(this._lobby.roster || {})) {
+        if (player) player.ready = true;
+      }
+      syncLobbyCompat(this._lobby);
     }
     this._started = true;
     this._status('connected', 'Â¡Partida en curso!');
@@ -924,8 +1430,12 @@ export class OnlineSession {
     }
   }
 
-  _onFullMessage() {
-    const message = 'La sala estÃ¡ llena (mÃ¡ximo 2 jugadores).';
+  _onFullMessage(msg = {}) {
+    if (this._role !== 'guest') return;
+    const maxPlayers = normalizeMaxPlayers(msg.maxPlayers, this.maxPlayers || 2);
+    const message = typeof msg.message === 'string' && msg.message.trim()
+      ? msg.message.trim()
+      : `La sala estÃ¡ llena (mÃ¡ximo ${maxPlayers} jugadores).`;
     this._lastError = message;
     this._emitError(message);
     if (this._joinReject) {
@@ -952,73 +1462,126 @@ export class OnlineSession {
     }
   }
 
+  _onReconnected(msg = {}) {
+    if (this._role !== 'guest') return;
+    if (msg.playerId && msg.playerId !== this._playerId) return;
+    const local = this._localLobbyPlayer();
+    if (local) local.connected = true;
+    this._status('connected', 'Reconectado con el host.');
+  }
+
   _onRestartLobby() {
     if (this._role !== 'guest') return;
     this._started = false;
     if (this._lobby) {
-      if (this._lobby.host) this._lobby.host.ready = false;
-      if (this._lobby.guest) this._lobby.guest.ready = false;
+      for (const player of Object.values(this._lobby.roster || {})) {
+        if (player) player.ready = false;
+      }
+      syncLobbyCompat(this._lobby);
     }
     this._status('connected', 'El host volviÃ³ al lobby. Esperando READY...');
     this._emitLobby();
   }
 
-  _onPing(msg) {
+  _onPing(msg, conn = null) {
     // Ping/pong de partida viajan con payload (`{t:'ping', p:{t:...}}`) y se enrutan
     // a onMatchMessage. Esto cubre sÃ³lo el heartbeat interno plano.
+    const senderId = this._role === 'host'
+      ? this._connPlayers.get(conn) || null
+      : this._lobby?.hostId || this._lobby?.host?.id || null;
     if (msg.p && typeof msg.p === 'object') {
-      if (this._started) this._emitMatch('ping', msg.p);
+      if (this._started) this._emitMatch('ping', msg.p, senderId);
       return;
     }
-    this._sendRaw({ t: 'pong', ts: msg.ts });
+    if (this._role === 'host' && senderId) this._sendObjectTo(senderId, { t: 'pong', ts: msg.ts });
+    else this._sendRaw({ t: 'pong', ts: msg.ts });
   }
 
   _maybeStart() {
     if (this._role !== 'host' || this._started || this._closing || this._closed) return;
-    if (!this._lobby || !this._lobby.guest || !this._lobby.host) {
+    if (!this._lobby || !this._lobby.host) {
       this._cancelStartTimer();
       return;
     }
-    if (!this.connected) {
+    const players = sortedPlayersFromRoster(this._lobby.roster);
+    const maxPlayers = normalizeMaxPlayers(this._lobby.maxPlayers);
+    if (players.length !== maxPlayers) {
       this._cancelStartTimer();
       return;
     }
-    if (!this._lobby.host.ready || !this._lobby.guest.ready) {
+    if (players.some((player) => !player.connected || !player.ready)) {
+      this._cancelStartTimer();
+      return;
+    }
+    if (this._connections.size < maxPlayers - 1) {
       this._cancelStartTimer();
       return;
     }
     if (this._startTimer != null) return;
-    this._status('connected', 'Â¡Ambos listos! Empezando partida...');
+    this._status('connected', 'Â¡Todos listos! Empezando partida...');
     this._startTimer = this._setTimer(() => {
       this._startTimer = null;
       if (this._started || this._closed || this._closing) return;
-      if (!this._lobby || !this._lobby.guest) return;
-      if (!this._lobby.host.ready || !this._lobby.guest.ready) return;
+      if (!this._lobby) return;
+      const current = sortedPlayersFromRoster(this._lobby.roster);
+      if (current.length !== normalizeMaxPlayers(this._lobby.maxPlayers)) return;
+      if (current.some((player) => !player.connected || !player.ready)) return;
       this._startMatch();
     }, START_DELAY_MS);
   }
 
   _startMatch() {
-    if (this._role !== 'host' || !this._lobby || !this._lobby.guest) return;
+    if (this._role !== 'host' || !this._lobby) return;
     if (this._started) return;
+    const players = sortedPlayersFromRoster(this._lobby.roster);
+    const maxPlayers = normalizeMaxPlayers(this._lobby.maxPlayers);
+    if (players.length !== maxPlayers || players.some((player) => !player.connected || !player.ready)) return;
+    const host = players.find((player) => player.isHost || player.slot === 0);
+    const legacyGuest = players.find((player) => player.slot === 1);
+    if (!host || !legacyGuest) return;
     this._started = true;
     const now = Date.now();
+    const spawnRollsByPlayer = balancedSpawnRolls(players);
+    const namesById = {};
+    for (const player of players) namesById[player.id] = player.name;
+    const spawnRolls = {
+      CT: spawnRollsByPlayer[host.id],
+      T: spawnRollsByPlayer[legacyGuest.id],
+      ...spawnRollsByPlayer,
+      byPlayerId: { ...spawnRollsByPlayer },
+    };
     const common = {
       code: this._code,
-      names: { host: this._lobby.host.name, guest: this._lobby.guest.name },
-      hostTeam: 'CT',
-      guestTeam: 'T',
+      mode: maxPlayers === 4 ? MODE_2V2 : MODE_1V1,
+      maxPlayers,
+      hostId: host.id,
+      players: players.map(copyPlayer),
+      names: { host: host.name, guest: legacyGuest.name, byId: namesById },
+      hostTeam: host.team,
+      guestTeam: legacyGuest.team,
       startAt: now + COUNTDOWN_MS,
       targetKills: TARGET_KILLS,
       map: this._lobby.map,
-      // Same team-specific initial spawn rolls arrive at both clients.
-      spawnRolls: { CT: Math.random(), T: Math.random() },
+      spawnRolls,
     };
-    const guestPayload = { ...common, role: 'guest' };
-    this._sendRaw({ t: 'start', ...guestPayload });
+    for (const player of players) {
+      if (player.isHost) continue;
+      const guestPayload = {
+        ...common,
+        role: 'guest',
+        localPlayerId: player.id,
+        localTeam: player.team,
+      };
+      this._sendObjectTo(player.id, { t: 'start', ...guestPayload });
+    }
     this._status('connected', 'Partida en curso');
     try {
-      this.handlers.onStart?.({ ...common, role: 'host' });
+      this.handlers.onStart?.({
+        ...common,
+        role: 'host',
+        localPlayerId: host.id,
+        localTeam: host.team,
+      });
     } catch (err) {
       console.error('[CS16 online] onStart', err);
     }
@@ -1039,8 +1602,9 @@ export class OnlineSession {
 
   _broadcastLobby() {
     if (!this._lobby) return;
+    syncLobbyCompat(this._lobby);
     if (this._role === 'host') {
-      this._sendRaw({ t: 'lobby', lobby: copyLobby(this._lobby) });
+      this._broadcastRaw({ t: 'lobby', lobby: copyLobby(this._lobby) });
     }
     this._emitLobby();
   }
@@ -1061,9 +1625,9 @@ export class OnlineSession {
     }
   }
 
-  _emitMatch(type, payload) {
+  _emitMatch(type, payload, senderId = null) {
     try {
-      this.handlers.onMatchMessage?.(type, payload);
+      this.handlers.onMatchMessage?.(type, payload, senderId);
     } catch (err) {
       console.error('[CS16 online] onMatchMessage', type, err);
     }
