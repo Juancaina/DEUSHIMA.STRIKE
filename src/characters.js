@@ -1,56 +1,57 @@
-﻿/**
- * Personajes Kenney "Animated Characters Protagonists" (CC0).
+/**
+ * Third-person characters based on Quaternius "Toon Shooter Game Kit" (CC0).
  *
- * Los FBX originales estÃƒÂ¡n en assets/characters/. Se cargan una sola vez y se
- * clonan con SkeletonUtils para cada bot/avatar. La piel (skin PNG) se asigna
- * al material del mesh; las animaciones idle/run/jump vienen de los FBX
- * separados del pack.
+ * The GLB files are processed assets from TinyStrike and retain the pack clips:
+ * Idle, Walk, Run_Gun, Duck, Jump, Death, etc. They are loaded once and cloned
+ * with SkeletonUtils for bots and online avatars.
  */
 import * as THREE from '../vendor/three.module.js';
-import { FBXLoader } from '../vendor/loaders/FBXLoader.js';
+import { GLTFLoader } from '../vendor/loaders/GLTFLoader.js';
 import { clone as skeletonClone } from '../vendor/utils/SkeletonUtils.js';
 
-const ASSET_ROOT = '/assets/characters';
-const MODEL_SCALE = 0.0047;
-const BODY_STRETCH = 1.25; // personajes altos, sin silueta "chibi" baja
-const SKINS = {
-  CT: ['cyborgFemaleA', 'skaterMaleA'],
-  T: ['criminalMaleA', 'skaterFemaleA'],
+const ASSET_ROOT = '/assets/characters/quaternius';
+const TARGET_HEIGHT = 1.8;
+const MODELS = {
+  CT: { url: `${ASSET_ROOT}/soldier_ct.glb`, bodyHeight: 2.2699 },
+  T: { url: `${ASSET_ROOT}/soldier_t.glb`, bodyHeight: 2.1358 },
 };
 
-const _aimQ = new THREE.Quaternion();
-const _aimWQ = new THREE.Quaternion();
-const _aimPQ = new THREE.Quaternion();
-const _aimA = new THREE.Vector3();
-const _aimB = new THREE.Vector3();
+const GUN_MESH_NAMES = new Set(['AK', 'SMG', 'Sniper', 'Pistol']);
+const PISTOLS = new Set(['glock', 'glock18', 'usp', 'p228', 'deagle', 'elite', 'fiveseven']);
+const SMGS = new Set(['mp5', 'tmp', 'p90', 'ump45', 'mac10']);
+const SNIPERS = new Set(['awp', 'scout', 'sg550', 'g3sg1']);
+const HIDDEN_WEAPONS = new Set([
+  'knife', 'c4', 'hegrenade', 'flashbang', 'smokegrenade', 'grenade', 'none',
+]);
 
-const _aimTmpQ = new THREE.Quaternion();
-const _aimTarget = new THREE.Vector3();
-/** Orienta un hueso para que su hijo directo apunte a `target` local del modelo. */
-function aimBone(bone, target, model) {
-  if (!bone) return;
-  const child = bone.children.find((c) => c.isBone);
-  if (!child) return;
-  bone.updateWorldMatrix(true, false);
-  child.updateWorldMatrix(true, false);
-  bone.getWorldPosition(_aimA);
-  child.getWorldPosition(_aimB);
-  const dir = _aimB.sub(_aimA).normalize();
-  if (dir.lengthSq() < 0.5) return;
-  model.getWorldQuaternion(_aimTmpQ);
-  _aimTarget.copy(target).applyQuaternion(_aimTmpQ).normalize();
-  _aimQ.setFromUnitVectors(dir, _aimTarget);
-  bone.getWorldQuaternion(_aimWQ);
-  bone.parent.getWorldQuaternion(_aimPQ);
-  bone.quaternion.copy(_aimPQ.invert().multiply(_aimQ.multiply(_aimWQ)));
-  bone.updateMatrixWorld(true);
+function normalizeTeam(team) {
+  return team === 'T' ? 'T' : 'CT';
 }
 
-let loader = null;
+function weaponFamily(id) {
+  const key = String(id || '').toLowerCase();
+  if (!key || HIDDEN_WEAPONS.has(key)) return null;
+  if (PISTOLS.has(key)) return 'Pistol';
+  if (SMGS.has(key)) return 'SMG';
+  if (SNIPERS.has(key)) return 'Sniper';
+  return 'AK';
+}
 
-function getLoader() {
-  if (!loader) loader = new FBXLoader();
-  return loader;
+function clipMap(clips = []) {
+  const map = new Map();
+  for (const clip of clips) {
+    if (!clip?.name) continue;
+    map.set(clip.name.toLowerCase(), clip);
+  }
+  return map;
+}
+
+function firstClip(map, names) {
+  for (const name of names) {
+    const clip = map.get(String(name).toLowerCase());
+    if (clip) return clip;
+  }
+  return null;
 }
 
 export class CharacterLibrary {
@@ -58,210 +59,151 @@ export class CharacterLibrary {
     this.game = game;
     this.ready = false;
     this.loading = null;
-    this.base = null;
-    this.animations = {};
-    this.textures = new Map();
-    this._tmp = new THREE.Vector3();
-    this._tmp2 = new THREE.Vector3();
-    this._skinsPromise = this._loadSkins();
-  }
-
-  async _loadSkins() {
-    const tex = new THREE.TextureLoader();
-    const uniq = [...new Set(Object.values(SKINS).flat())];
-    await Promise.all(uniq.map(async (name) => {
-      try {
-        const texture = await tex.loadAsync(`${ASSET_ROOT}/${name}.png`);
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.magFilter = THREE.NearestFilter;
-        texture.minFilter = THREE.NearestFilter;
-        texture.flipY = true;
-        this.textures.set(name, texture);
-      } catch (err) {
-        console.warn('[characters] skin', name, err);
-      }
-    }));
+    this.sources = new Map();
   }
 
   async load() {
     if (this.ready) return this;
     if (this.loading) return this.loading;
+
     this.loading = (async () => {
-      await this._skinsPromise;
-      const fbx = getLoader();
-      const [base, idle, run, jump] = await Promise.all([
-        fbx.loadAsync(`${ASSET_ROOT}/characterMedium.fbx`),
-        fbx.loadAsync(`${ASSET_ROOT}/idle.fbx`),
-        fbx.loadAsync(`${ASSET_ROOT}/run.fbx`),
-        fbx.loadAsync(`${ASSET_ROOT}/jump.fbx`),
-      ]);
-      base.scale.setScalar(MODEL_SCALE);
-      base.updateMatrixWorld(true);
-      const bb = new THREE.Box3().setFromObject(base);
-      base.position.y -= bb.min.y;
-      base.rotation.y = Math.PI; // el modelo de Kenney mira +Z; el juego usa -Z
-      base.updateMatrixWorld(true);
-      this.base = base;
-      const pick = (gltf, key) => gltf.animations.find((a) => a.name.toLowerCase().includes(key)) || gltf.animations[0];
-      this.animations.idle = pick(idle, 'idle') || null;
-      this.animations.run = pick(run, 'run') || null;
-      this.animations.jump = pick(jump, 'jump') || null;
+      const loader = new GLTFLoader();
+      const loaded = await Promise.all(
+        Object.entries(MODELS).map(async ([team, info]) => {
+          const gltf = await loader.loadAsync(info.url);
+          gltf.scene.traverse((obj) => {
+            if (!obj.isMesh && !obj.isSkinnedMesh) return;
+            obj.frustumCulled = false;
+            obj.castShadow = true;
+            obj.receiveShadow = true;
+          });
+          this.sources.set(team, {
+            scene: gltf.scene,
+            clips: gltf.animations || [],
+            bodyHeight: info.bodyHeight,
+          });
+        }),
+      );
+
+      if (loaded.length !== 2) throw new Error('Could not load both Quaternius soldiers');
       this.ready = true;
       return this;
     })();
+
     try {
       return await this.loading;
     } catch (err) {
-      console.error('[characters] no se pudieron cargar los modelos Kenney', err);
+      console.error('[characters] Quaternius soldier load failed', err);
       this.loading = null;
       return this;
     }
   }
 
-  _skinFor(team, seed) {
-    const list = SKINS[team] || SKINS.CT;
-    const n = Math.abs(Math.floor((Number(seed) || 0) * 10000));
-    return list[n % list.length];
-  }
-
-  _applySkin(model, skinName) {
-    const texture = this.textures.get(skinName);
-    model.traverse((o) => {
-      if (!o.isMesh && !o.isSkinnedMesh) return;
-      o.frustumCulled = false;
-      const mats = Array.isArray(o.material) ? o.material : [o.material];
-      const next = mats.map((m) => {
-        const mat = m?.clone ? m.clone() : new THREE.MeshStandardMaterial();
-        if (texture) {
-          mat.map = texture;
-          mat.color?.set(0xffffff);
-        }
-        if ('roughness' in mat) mat.roughness = 0.82;
-        if ('metalness' in mat) mat.metalness = 0.02;
-        mat.needsUpdate = true;
-        return mat;
-      });
-      o.material = Array.isArray(o.material) ? next : next[0];
-    });
-  }
-
-  _makeWeapon() {
-    const group = new THREE.Group();
-    group.name = 'kenneyWeapon';
-    const dark = new THREE.MeshStandardMaterial({ color: 0x1b1e20, roughness: 0.55, metalness: 0.35 });
-    const metal = new THREE.MeshStandardMaterial({ color: 0x3b4145, roughness: 0.4, metalness: 0.55 });
-    const wood = new THREE.MeshStandardMaterial({ color: 0x252a2e, roughness: 0.65, metalness: 0.25 });
-    const body = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.09, 0.48), dark);
-    body.position.set(0, 0, -0.17);
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.026, 0.48, 8), metal);
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(0, 0.012, -0.53);
-    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.15, 0.09), metal);
-    mag.position.set(0, -0.1, -0.18);
-    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.075, 0.24), wood);
-    stock.position.set(0, -0.015, 0.13);
-    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.13, 0.07), dark);
-    grip.position.set(0, -0.09, 0.02);
-    group.add(body, barrel, mag, stock, grip);
-    group.scale.setScalar(1.15);
-    return group;
-  }
-
   create(team, seed = 0) {
-    if (!this.ready || !this.base) return null;
-    const skin = this._skinFor(team, seed);
-    const model = skeletonClone(this.base);
-    model.rotation.y = Math.PI;
-    model.scale.set(MODEL_SCALE * 0.9, MODEL_SCALE * BODY_STRETCH, MODEL_SCALE * 0.9);
+    void seed;
+    const normalizedTeam = normalizeTeam(team);
+    const source = this.sources.get(normalizedTeam);
+    if (!this.ready || !source?.scene) return null;
+
+    const model = skeletonClone(source.scene);
+    model.name = `operative:${normalizedTeam}`;
+    const scale = TARGET_HEIGHT / source.bodyHeight;
+    model.scale.setScalar(scale);
     model.updateMatrixWorld(true);
-    const modelBox = new THREE.Box3().setFromObject(model);
-    model.position.y -= modelBox.min.y;
-    this._applySkin(model, skin);
+
+    const box = new THREE.Box3().setFromObject(model);
+    if (Number.isFinite(box.min.y)) model.position.y -= box.min.y;
+    model.updateMatrixWorld(true);
 
     const root = new THREE.Group();
-    root.name = `kenney:${team}:${skin}`;
+    root.name = `character:${normalizedTeam}`;
     root.add(model);
-    const weapon = this._makeWeapon();
-    root.add(weapon);
 
-    const rightArm = model.getObjectByName('RightArm');
-    const leftArm = model.getObjectByName('LeftArm');
-    const rightForeArm = model.getObjectByName('RightForeArm');
-    const leftForeArm = model.getObjectByName('LeftForeArm');
-    const headBone = model.getObjectByName('Head');
-    if (headBone) headBone.scale.setScalar(0.62);
-    const aimPose = () => {
-      // Pose de disparo: brazos delante, codos flexionados, arma a la altura del pecho.
-      if (rightArm) aimBone(rightArm, new THREE.Vector3(0.3, -0.45, 1), model);
-      if (leftArm) aimBone(leftArm, new THREE.Vector3(-0.3, -0.45, 1), model);
-      if (rightForeArm) aimBone(rightForeArm, new THREE.Vector3(0.08, 0.45, 1), model);
-      if (leftForeArm) aimBone(leftForeArm, new THREE.Vector3(-0.08, 0.45, 1), model);
-      if (headBone) headBone.scale.setScalar(0.62);
-    };
-    aimPose();
+    const gunMeshes = {};
+    model.traverse((obj) => {
+      if (GUN_MESH_NAMES.has(obj.name)) gunMeshes[obj.name] = obj;
+    });
 
     const mixer = new THREE.AnimationMixer(model);
-    const handTmp = new THREE.Vector3();
+    const clips = clipMap(source.clips);
     const actions = {};
-    for (const name of ['idle', 'run', 'jump']) {
-      const clip = this.animations[name];
-      if (!clip) continue;
-      const action = mixer.clipAction(clip);
-      action.enabled = false;
-      action.setEffectiveWeight(0);
-      actions[name] = action;
+    for (const [name, clip] of clips) {
+      actions[name] = mixer.clipAction(clip);
+      actions[name].enabled = false;
+      actions[name].setEffectiveWeight(0);
     }
-    let currentName = null;
-    const play = (name) => {
-      const action = actions[name];
-      if (!action || currentName === name) return;
-      for (const other of Object.values(actions)) {
-        other.stop();
-        other.enabled = false;
-        other.setEffectiveWeight(0);
-      }
-      action.reset();
-      action.enabled = true;
-      action.setEffectiveWeight(1);
-      action.setLoop(THREE.LoopRepeat, Infinity);
-      if (name === 'jump') action.setLoop(THREE.LoopOnce, 1);
-      action.play();
-      currentName = name;
-    };
-    play('idle');
 
-    const rightHand = model.getObjectByName('RightHand');
+    let currentName = '';
+    let currentWeapon = '';
+    const play = (requested, fade = 0.08) => {
+      const name = String(requested || 'Idle').toLowerCase();
+      const clip = firstClip(clips, [name, 'idle']);
+      if (!clip) return;
+      const nextName = clip.name.toLowerCase();
+      if (currentName === nextName) return;
+
+      const next = actions[nextName] || mixer.clipAction(clip);
+      const prev = currentName ? actions[currentName] : null;
+      next.enabled = true;
+      next.reset();
+      next.setEffectiveWeight(1);
+      next.setLoop(THREE.LoopRepeat, Infinity);
+      next.fadeIn(fade).play();
+      if (prev && prev !== next) prev.fadeOut(fade);
+      currentName = nextName;
+    };
+
+    const setWeapon = (weaponId) => {
+      const key = String(weaponId || '').toLowerCase();
+      if (key === currentWeapon) return;
+      currentWeapon = key;
+      const family = weaponFamily(key);
+      for (const [name, obj] of Object.entries(gunMeshes)) {
+        obj.visible = !!family && name === family;
+      }
+    };
+
+    play('Idle', 0);
+    setWeapon(normalizedTeam === 'T' ? 'glock' : 'usp');
+
     return {
-      root, model, mixer, actions, weapon, rightHand, skin, aimPose,
-      state: 'idle',
-      setState(name) {
-        play(name === 'run' ? 'run' : name === 'jump' ? 'jump' : 'idle');
-        this.state = name;
+      root,
+      model,
+      mixer,
+      actions,
+      gunMeshes,
+      yawOffset: 0,
+      targetHeight: TARGET_HEIGHT,
+      get state() {
+        return currentName;
       },
-      update(dt, bot, moving) {
-        this.mixer.update(dt);
-        if (moving) this.setState('run');
-        else if (bot.onGround) this.setState('idle');
-        this.aimPose();
-        this.root.updateMatrixWorld(true);
-        if (this.rightHand) {
-          this.rightHand.getWorldPosition(handTmp);
-          this.root.worldToLocal(handTmp);
-          this.weapon.position.copy(handTmp);
-          this.weapon.position.y -= 0.02;
-          this.weapon.position.z += 0.02;
+      setState(name) {
+        play(name);
+      },
+      setWeapon,
+      update(dt, actor = {}, moving = false) {
+        const step = Math.min(0.1, Math.max(0, Number(dt) || 0));
+        const speed = Number(actor.speed ?? actor.moveSpeed ?? actor._speed) || 0;
+        const crouching = !!actor.crouching;
+        const onGround = actor.onGround !== false;
+
+        setWeapon(actor.weaponId);
+
+        let state = 'Idle';
+        if (crouching) state = 'Duck';
+        else if (!onGround) state = 'Jump_Idle';
+        else if (moving || speed > 3.2) state = 'Run_Gun';
+        else if (speed > 0.45) state = 'Walk';
+
+        play(state);
+        const action = currentName ? actions[currentName] : null;
+        if (action && currentName === 'run_gun') {
+          action.timeScale = Math.max(0.72, Math.min(1.4, speed / 5.6 + 0.2));
+        } else if (action) {
+          action.timeScale = 1;
         }
-        this.weapon.rotation.set(
-          THREE.MathUtils.clamp(-(bot.pitch || 0) * 0.9, -0.9, 0.9),
-          0,
-          0,
-        );
+        mixer.update(step);
       },
     };
   }
 }
-
-
-
-
-

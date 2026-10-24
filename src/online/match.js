@@ -1,4 +1,4 @@
-﻿/**
+/**
  * OnlineMatch Ã¢â‚¬â€ partida 1v1 host-autoritativa sobre OnlineSession (PeerJS).
  *
  * Responsabilidades:
@@ -318,6 +318,12 @@ export class OnlineMatch {
       },
       get velocity() {
         return match.avatar ? match.avatar._speed || 0 : 0;
+      },
+      get weaponId() {
+        return match.avatar ? match.avatar.weaponId : 'knife';
+      },
+      get onGround() {
+        return match.avatar ? match.avatar.onGround : true;
       },
       name: this.remoteName,
       team: this.remoteTeam,
@@ -1034,6 +1040,9 @@ export class OnlineMatch {
       yaw: round3(num(player.yaw)),
       pitch: round3(num(player.pitch)),
       crouch: !!player.crouching,
+      onGround: player.onGround !== false,
+      moveSpeed: round3(player.getVelocity2D?.() ?? player.speed ?? 0),
+      weaponId: this.game?.weapons?.currentId || 'knife',
       alive: player.alive !== false,
     });
   }
@@ -1122,11 +1131,17 @@ export class OnlineMatch {
       num(payload.pitch, 0),
       !!payload.crouch,
       alive,
+      typeof payload.weaponId === 'string' ? payload.weaponId : null,
+      payload.onGround !== false,
+      num(payload.moveSpeed, 0),
     );
     if (this.isHost) {
       this._lastRemoteState = {
         pos: { x: num(pos.x), y: num(pos.y), z: num(pos.z) },
         crouch: !!payload.crouch,
+        weaponId: typeof payload.weaponId === 'string' ? payload.weaponId : null,
+        onGround: payload.onGround !== false,
+        moveSpeed: num(payload.moveSpeed, 0),
         at: Date.now(),
       };
     } else if (!alive) {

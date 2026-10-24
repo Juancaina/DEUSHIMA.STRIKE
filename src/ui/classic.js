@@ -192,7 +192,8 @@ class ClassicHUD {
     this._drawRadar(hud.radar, rx, ry, rs);
     this.text((hud.mapName || 'AIM_1V1').toUpperCase(), rx + 2, ry + rs + 3, { size: 8, color: '#d8d2ba', alpha: 0.9 });
     // timer y marcador (arriba centro)
-    const isSurf = this.game?.map?.mode === 'surf';
+
+
     const t = Math.max(0, Math.ceil(r.timeLeft || 0));
     const mm = Math.floor(t / 60);
     const ss = String(t % 60).padStart(2, '0');
@@ -200,19 +201,12 @@ class ClassicHUD {
     this.number(mm, clockX - 44, 16, 1.05, GOLD, 'right');
     this._colon(clockX - 1, 17, GOLD);
     this.number(ss, clockX + 4, 16, 1.05, GOLD);
-    this.text(isSurf ? 'SURF' : `RONDA ${r.round || r.roundNumber || 1}`, clockX, 44, { size: 8, color: '#c9c3ad', align: 'center', alpha: 0.9 });
-    if (isSurf) {
-      const spd = Math.round(Math.hypot(this.game.player?.vel?.x || 0, this.game.player?.vel?.z || 0));
-      this.text(`${spd} u/s`, clockX, 62, { size: 11, color: GREEN, align: 'center', weight: 700 });
-      this.text(r.objective || '', clockX, 78, { size: 8, color: '#c9c3ad', align: 'center', alpha: 0.9 });
-    }
-    if (!isSurf) {
+    this.text(`RONDA ${r.round || r.roundNumber || 1}`, clockX, 44, { size: 8, color: '#c9c3ad', align: 'center', alpha: 0.9 });
       // scores CT / T
       this.text('CT', 194, 22, { size: 10, color: BLUE, weight: 700 });
       this.number(r.scoreCT || 0, 216, 17, 1, BLUE);
       this.number(r.scoreT || 0, 404, 17, 1, '#ffb35d');
       this.text('T', 432, 22, { size: 10, color: '#ffb35d', weight: 700 });
-    }
     // freeze / estado
     if (r.phase === 'freeze' && r.freezeLeft > 0) {
       this.text('CONGELADO', 320, 70, { size: 11, color: GOLD, align: 'center' });
@@ -401,7 +395,7 @@ class ClassicHUD {
       ctx.font = '11px "Trebuchet MS", Tahoma, sans-serif';
       ctx.textAlign = 'right';
       ctx.textBaseline = 'top';
-      const label = `${k.killer}  ${k.hs ? '☠' : '×'}  ${k.victim}`;
+      const label = `${k.killer}  ${k.hs ? 'â˜ ' : 'Ã—'}  ${k.victim}`;
       const w = ctx.measureText(label).width + 12;
       ctx.fillStyle = 'rgba(0,0,0,0.65)';
       ctx.fillRect(640 - w - 8, y, w, 18);
@@ -434,22 +428,20 @@ class ClassicMenu {
         <div class="cm-rule"></div>
       </div>
       <button class="cm-fullscreen" data-cm="fullscreen" type="button" title="Pantalla completa">
-        <span class="cm-fs-icon">⛶</span><span class="cm-fs-label">PANTALLA COMPLETA</span>
+        <span class="cm-fs-icon">â›¶</span><span class="cm-fs-label">PANTALLA COMPLETA</span>
       </button>
       <nav class="cm-nav" aria-label="Men principal">
         <button class="cm-btn primary" data-cm="duel"><span class="idx">01</span>JUGAR 1V1<span class="hint">AIM_MAP</span></button>
-        <button class="cm-btn" data-cm="redline"><span class="idx">02</span>AIM_REDLINE<span class="hint">REDLINE · BOTS</span></button>
-        <button class="cm-btn" data-cm="assault"><span class="idx">03</span>ASSAULT 1V1<span class="hint">ALMACÉN</span></button>
-        <button class="cm-btn" data-cm="surf"><span class="idx">04</span>SURF<span class="hint">SURF_DEUSHIMA</span></button>
-        <button class="cm-btn" data-cm="bomb"><span class="idx">05</span>BOMBARDEO<span class="hint">DE_DUST2</span></button>
-        <button class="cm-btn" data-cm="online"><span class="idx">06</span>ONLINE 1V1<span class="hint">AMIGOS</span></button>
-        <button class="cm-btn" data-cm="options"><span class="idx">07</span>OPCIONES<span class="hint">AJUSTES</span></button>
-        <button class="cm-btn" data-cm="help"><span class="idx">08</span>CÓMO JUGAR<span class="hint">AYUDA</span></button>
-        <button class="cm-btn" data-cm="quit"><span class="idx">09</span>SALIR<span class="hint">FIN</span></button>
+        <button class="cm-btn" data-cm="redline"><span class="idx">02</span>AIM_REDLINE<span class="hint">REDLINE Â· BOTS</span></button>
+        <button class="cm-btn" data-cm="assault"><span class="idx">03</span>ASSAULT 1V1<span class="hint">ALMACÃ‰N</span></button>
+        <button class="cm-btn" data-cm="online"><span class="idx">04</span>ONLINE 1V1<span class="hint">AMIGOS</span></button>
+        <button class="cm-btn" data-cm="options"><span class="idx">05</span>OPCIONES<span class="hint">AJUSTES</span></button>
+        <button class="cm-btn" data-cm="help"><span class="idx">06</span>COMO JUGAR<span class="hint">AYUDA</span></button>
+        <button class="cm-btn" data-cm="quit"><span class="idx">07</span>SALIR<span class="hint">FIN</span></button>
       </nav>
       <aside class="cm-server">
         <h2>Servidor local <span>offline</span></h2>
-        <div class="cm-row"><span>Estado</span><b class="ok">● Listo</b></div>
+        <div class="cm-row"><span>Estado</span><b class="ok">â— Listo</b></div>
         <div class="cm-row"><span>Mapa</span><b>aim_1v1</b></div>
         <div class="cm-row"><span>Modo</span><b>DUELO 1V1</b></div>
         <div class="cm-row"><span>Rondas</span><b>Primero a 13</b></div>
@@ -457,7 +449,7 @@ class ClassicMenu {
         <div class="cm-news">
           <h3>Noticias</h3>
           <p><b>DUELO RPIDO:</b> sin freeze, muerte animada y siguiente ronda al tocar el suelo. Primero a 13 o empate 12-12.</p>
-          <p><b>SURF:</b> mapa de rampas inspirado en surfd.net, con fsica de deslizamiento.</p>
+          <p><b>ONLINE:</b> salas rapidas para jugar AIM con amigos.</p>
         </div>
       </aside>
       <div class="cm-foot">
@@ -476,9 +468,7 @@ class ClassicMenu {
         if (action === 'duel') this._startDuel();
         else if (action === 'redline') this._startRedline();
         else if (action === 'assault') this._startAssault();
-        else if (action === 'bomb') this._startBomb();
         else if (action === 'online') this._startOnline();
-        else if (action === 'surf') this._startSurf();
         else if (action === 'fullscreen') this._toggleFullscreen();
         else if (action === 'options') this.game.classicPause?.show(true);
         else if (action === 'help') this._openModal(this._helpMarkup());
@@ -497,8 +487,6 @@ class ClassicMenu {
     if (auto === 'duel') setTimeout(() => this._startDuel(), 700);
     if (auto === 'redline') setTimeout(() => this._startRedline(), 700);
     if (auto === 'assault') setTimeout(() => this._startAssault(), 700);
-    if (auto === 'surf') setTimeout(() => this._startSurf(), 700);
-    if (auto === 'bomb') setTimeout(() => this._startBomb(), 700);
   }
   _toggleFullscreen() {
     if (document.fullscreenElement) {
@@ -535,10 +523,6 @@ class ClassicMenu {
     if (typeof this.game.startDuel === 'function') this.game.startDuel({ difficulty: 'normal', roundsToWin: Number(this.game.settings.roundsToWin) || 13 });
     else this.game.startMatch({ map: 'de_dust2', team: 'CT', teamSize: 2, roundsToWin: 10 });
   }
-  _startBomb() {
-    this._hide();
-    this.game.startMatch({ map: 'de_dust2', team: 'auto', teamSize: 5, roundsToWin: 8 });
-  }
   _startRedline() {
     this._hide();
     this.game._suppressPause = true;
@@ -565,12 +549,6 @@ class ClassicMenu {
       console.warn('[classic] online', err);
       this._show();
     }
-  }
-  _startSurf() {
-    this._hide();
-    this.game._suppressPause = true;
-    setTimeout(() => { this.game._suppressPause = false; }, 1600);
-    if (typeof this.game.startSurf === 'function') this.game.startSurf();
   }
   _hide() { this.visible = false; this.root.classList.add('hidden'); }
   _show() { this.visible = true; this.root.classList.remove('hidden'); }
@@ -657,25 +635,25 @@ class ClassicPause {
       <div class="cp-panel">
         <header class="cp-head">
           <div class="cp-logo">DEUSHIMA <b>STRIKE</b></div>
-          <div class="cp-mode">PAUSA · CONFIGURACIÓN</div>
+          <div class="cp-mode">PAUSA Â· CONFIGURACIÃ“N</div>
         </header>
         <div class="cp-body">
           <nav class="cp-tabs">
-            <button class="cp-tab" data-cp-tab="mouse">RATÓN</button>
+            <button class="cp-tab" data-cp-tab="mouse">RATÃ“N</button>
             <button class="cp-tab" data-cp-tab="keyboard">TECLADO</button>
             <button class="cp-tab" data-cp-tab="audio">AUDIO</button>
-            <button class="cp-tab" data-cp-tab="video">VÍDEO</button>
+            <button class="cp-tab" data-cp-tab="video">VÃDEO</button>
             <button class="cp-tab" data-cp-tab="game">JUEGO</button>
           </nav>
           <div class="cp-content" data-cp-content></div>
         </div>
         <footer class="cp-foot">
-          <button class="cp-btn danger" data-cp="quit">SALIR AL MENÚ</button>
+          <button class="cp-btn danger" data-cp="quit">SALIR AL MENÃš</button>
           <button class="cp-btn" data-cp="close">CERRAR</button>
           <button class="cp-btn primary" data-cp="resume">REANUDAR</button>
           <button class="cp-btn" data-cp="apply">APLICAR</button>
         </footer>
-        <button class="cp-close" data-cp="close" aria-label="Cerrar">×</button>
+        <button class="cp-close" data-cp="close" aria-label="Cerrar">Ã—</button>
       </div>`;
     this.root.addEventListener('click', (e) => {
       const tab = e.target.closest('[data-cp-tab]');
@@ -738,13 +716,13 @@ class ClassicPause {
     const content = this.root.querySelector('[data-cp-content]');
     if (this.tab === 'mouse') {
       content.innerHTML = `
-        <h2 class="cp-title">Ratón</h2>
+        <h2 class="cp-title">RatÃ³n</h2>
         <p class="cp-desc">Sensibilidad, inversin y zoom. Los cambios se aplican al instante.</p>
         
         ${this._row('sensitivity', 'Sensibilidad', 0.2, 3, 0.05)}
         ${this._row('zoomSensitivity', 'Sensibilidad de zoom', 0.2, 2, 0.05)}
         <label class="cp-check"><input type="checkbox" data-setting="invertY" ${s.invertY ? 'checked' : ''}> Invertir eje Y</label>
-        <label class="cp-check"><input type="checkbox" data-setting="rawInput" ${s.rawInput !== false ? 'checked' : ''}> Raw input / sin aceleración</label>`;
+        <label class="cp-check"><input type="checkbox" data-setting="rawInput" ${s.rawInput !== false ? 'checked' : ''}> Raw input / sin aceleraciÃ³n</label>`;
     } else if (this.tab === 'keyboard') {
       content.innerHTML = `
         <h2 class="cp-title">Teclado</h2>
@@ -762,7 +740,7 @@ class ClassicPause {
           <b>Tab</b><span>Marcador</span>
           <b>Esc</b><span>Pausa</span>
         </div>
-        <div class="cp-note">En surf: solt Ctrl/Shift y us A/D en el aire para mantener velocidad sobre las rampas. R reinicia el run.</div>`;
+        <div class="cp-note">Movimiento aereo: combina salto, strafe y giro de mouse para conservar momentum.</div>`;
     } else if (this.tab === 'audio') {
       content.innerHTML = `
         <h2 class="cp-title">Audio</h2>
@@ -773,7 +751,7 @@ class ClassicPause {
         <label class="cp-check"><input type="checkbox" data-setting="hitSound" ${s.hitSound !== false ? 'checked' : ''}> Sonido de impacto</label>`;
     } else if (this.tab === 'video') {
       content.innerHTML = `
-        <h2 class="cp-title">Vídeo</h2>
+        <h2 class="cp-title">VÃ­deo</h2>
         <p class="cp-desc">Resolucin interna, campo de visin y mira.</p>
         ${this._row('resolution', 'Resolucin interna', 0.55, 1, 0.05)}
         ${this._row('fov', 'Campo de visin', 70, 110, 1)}

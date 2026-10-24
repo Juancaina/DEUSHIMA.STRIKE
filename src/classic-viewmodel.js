@@ -145,7 +145,6 @@ export class ClassicViewModel {
   render(renderer) {
     const game = this.game;
     if (!game || !['playing', 'roundover'].includes(game.state)) return;
-    if (game.map?.mode === 'surf') return;
     if (!game.player?.alive) return;
     const w = game.weapons;
     if (!w) return;

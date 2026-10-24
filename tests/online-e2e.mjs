@@ -385,6 +385,21 @@ async function main() {
       throw new Error('Wrong initial spawn: ' + JSON.stringify(spawnCheck));
   }
   log('Both in', TEST_MAP);
+
+  // Regression: remote pose/equipment must replicate, not just position/yaw.
+  // Send one real protocol state explicitly; headless Chrome cannot retain
+  // pointer-lock reliably enough to exercise held Ctrl through Player.update().
+  await host.waitFor("window.__CS16__.online.phase === 'live'", 15000);
+  await host.eval("(() => { const g=window.__CS16__; const prev={c:g.player.crouching,o:g.player.onGround,s:g.player.speed,w:g.weapons.currentId}; g.online._stateAccum=-999; g.player.crouching=true; g.player.onGround=false; g.player.speed=4.2; g.weapons.currentId='awp'; g.online._sendState(); g.player.crouching=prev.c; g.player.onGround=prev.o; g.player.speed=prev.s; g.weapons.currentId=prev.w; return true; })()");
+  await guest.waitFor("(() => { const a=window.__CS16__.online?.avatar; return !!a && a.crouchAmount > 0.45 && a.weaponId === 'awp' && a.onGround === false; })()", 10000);
+  await guest.waitFor("(() => { const c=window.__CS16__.online?.avatar?._kenney; return !!c && c.state === 'duck' && c.gunMeshes?.Sniper?.visible === true; })()", 10000);
+  const replicatedPose = await guest.eval("(() => { const a=window.__CS16__.online.avatar; const c=a._kenney; return { crouch:a.crouchAmount, weaponId:a.weaponId, onGround:a.onGround, anim:c?.state || null, sniperVisible:!!c?.gunMeshes?.Sniper?.visible }; })()");
+  if (!(replicatedPose.crouch > 0.45) || replicatedPose.weaponId !== 'awp' || replicatedPose.onGround !== false ||
+      replicatedPose.anim !== 'duck' || replicatedPose.sniperVisible !== true) {
+    throw new Error('Remote pose/equipment replication failed: ' + JSON.stringify(replicatedPose));
+  }
+  log('Remote pose/equipment:', replicatedPose);
+  await host.eval("(() => { window.__CS16__.online._stateAccum=1; return true; })()");
   await new Promise((r) => setTimeout(r, 2200));
   await host.screenshot('22-online-host-match.png');
   await guest.screenshot('23-online-guest-match.png');

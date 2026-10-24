@@ -547,14 +547,14 @@ export class BotManager {
     const root = character.root;
     root.rotation.order = 'YXZ';
     root.position.copy(bot.pos);
-    root.rotation.set(0, bot.yaw + Math.PI, 0);
-    bot.height = 2.15;
+    root.rotation.set(0, bot.yaw + (character.yawOffset || 0), 0);
+    bot.height = character.targetHeight || 1.8;
     this.game.scene?.add(root);
     bot.group = root;
     bot.parts = {
       character,
-      weaponGroup: character.weapon,
-      // props de objetivo (C4/kit) sobre el modelo Kenney
+      weaponGroup: null,
+      // props de objetivo (C4/kit) sobre el modelo Quaternius
       bomb: null,
       kit: null,
     };
@@ -572,9 +572,7 @@ export class BotManager {
     const p = bot.parts;
     if (!p) return;
     if (p.character) {
-      const w = this._weapon(bot);
-      const scale = Math.max(0.85, Math.min(1.35, (w.len || 0.5) * 1.7));
-      p.character.weapon.scale.setScalar(scale);
+      p.character.setWeapon?.(bot.weaponId);
       return;
     }
     const w = this._weapon(bot);
@@ -654,7 +652,7 @@ export class BotManager {
       bot.pitch = 0;
       bot.aimYaw = bot.yaw;
       bot.aimPitch = 0;
-      bot.height = bot.parts?.character ? 2.15 : 1.8;
+      bot.height = bot.parts?.character?.targetHeight || 1.8;
       bot.onGround = false;
       bot.speed = 0;
       bot._moving = false;
@@ -732,7 +730,7 @@ export class BotManager {
       if (bot.group) {
         bot.group.visible = true;
         bot.group.position.copy(bot.pos);
-        bot.group.rotation.set(0, bot.yaw + (bot.parts?.character ? Math.PI : 0), 0);
+        bot.group.rotation.set(0, bot.yaw + (bot.parts?.character?.yawOffset || 0), 0);
       }
       this._syncEquipment(bot);
       this._equipWeaponVisual(bot);
@@ -1962,7 +1960,7 @@ export class BotManager {
     if (p.character) {
       const bob = moving ? Math.abs(Math.sin(bot.animPhase)) * 0.02 : Math.sin(this._time * 1.7 + bot.seed * TAU) * 0.004;
       bot.group.position.set(bot.pos.x, bot.pos.y + bob, bot.pos.z);
-      bot.group.rotation.set(0, bot.yaw + Math.PI, 0);
+      bot.group.rotation.set(0, bot.yaw + (p.character?.yawOffset || 0), 0);
       p.character.update(dt, bot, moving);
       return;
     }
@@ -2001,7 +1999,7 @@ export class BotManager {
     const p = bot.parts;
     bot.group.visible = bot.corpseTimer > 0;
     bot.group.position.set(bot.pos.x, bot.pos.y + 0.16 * e, bot.pos.z);
-    bot.group.rotation.set(bot.fallSign * e * 1.45, bot.yaw + (p?.character ? Math.PI : 0), bot.fallTilt * e);
+    bot.group.rotation.set(bot.fallSign * e * 1.45, bot.yaw + (p?.character?.yawOffset || 0), bot.fallTilt * e);
 
     if (p) {
       if (p.character) {

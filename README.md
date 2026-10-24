@@ -1,8 +1,8 @@
-﻿# DEUSHIMA STRIKE
+# DEUSHIMA STRIKE
 
 Reconstrucción local en browser de **Counter-Strike 1.6** con identidad propia:
 **DEUSHIMA STRIKE**. Usa los assets reales de la instalación GoldSrc, un menú con
-arte original, HUD clásico, armas originales, duelos 1v1 rápidos y un mapa de surf.
+arte original, HUD clásico, armas originales y duelos AIM rápidos para jugar solo o con amigos.
 
 ![Menú DEUSHIMA STRIKE](screenshots/deushima-menu.png)
 
@@ -14,8 +14,7 @@ arte original, HUD clásico, armas originales, duelos 1v1 rápidos y un mapa de 
 - **385 sonidos originales** + efecto de recarga propio: armas, pasos, radio, dolor/muerte, C4 y UI.
 - **Recarga unificada**: todas las armas usan el mismo sonido, tardan **2 s** y
   recargan automáticamente al vaciar el cargador.
-- **Personajes Kenney**: bots y rivales usan los modelos `Animated Characters Protagonists`
-  (idle/run/jump, skins CT/T, ~2.2 m, pose de disparo) desde `assets/characters/`.
+- **Personajes Quaternius (CC0)**: soldados CT/T con animaciones `Idle`, `Walk`, `Run_Gun`, `Duck`, `Jump` y `Death` desde `assets/characters/quaternius/`.
 - **Nombres de aliados**: etiqueta sobre la cabeza, visible a través de paredes, con barra de vida.
 - **Aparición aleatoria** en cada ronda del lado TT y CT (no siempre el mismo punto).
 - **Viewmodels originales** de AK-47, M4A1, AWP, Deagle, USP, Glock y más.
@@ -29,10 +28,7 @@ arte original, HUD clásico, armas originales, duelos 1v1 rápidos y un mapa de 
   - animación de muerte/caída y siguiente ronda automática al tocar el suelo;
   - primero a **13 rondas**; **12-12 es empate**;
   - **spawn aleatorio** en cada ronda del lado CT y del lado T.
-- **Mapas**: `AIM_REDLINE`, `aim_1v1`, `ASSAULT · ARENA 1V1`, `de_dust2`, `cs_office` y
-  **`SURF_DEUSHIMA`**. AIM_REDLINE está disponible en local y en el online 1v1.
-- **Surf**: rampas, huecos, checkpoints, timer, récord local y física de
-  deslizamiento/air-strafe propia, inspirada en surfd.net / `claude-surf`.
+- **Mapas AIM**: `AIM_REDLINE`, `aim_1v1` y `ASSAULT · ARENA 1V1`, disponibles para duelo rápido y online.
 - **Online 1v1** con PeerJS: lobby, código, READY, rondas por kill y revancha.
 - **Sprites nuevos** de `E:\Ivan\Desktop\sprites` integrados (daño, iconos, HUD).
 
@@ -42,9 +38,9 @@ arte original, HUD clásico, armas originales, duelos 1v1 rápidos y un mapa de 
 |---|---|
 | ![Menú](screenshots/deushima-menu.png) | ![Duelo](screenshots/deushima-duel.png) |
 
-| Assault | Surf |
+| Assault | AIM |
 |---|---|
-| ![Assault](screenshots/deushima-assault.png) | ![Surf](screenshots/deushima-surf.png) |
+| ![Assault](screenshots/deushima-assault.png) | ![AIM](screenshots/deushima-duel.png) |
 
 ![Pausa / configuración](screenshots/deushima-settings.png)
 
@@ -52,7 +48,7 @@ arte original, HUD clásico, armas originales, duelos 1v1 rápidos y un mapa de 
 |---|---|
 | ![AIM_REDLINE CT](screenshots/deushima-redline-ct.png) | ![AIM_REDLINE T](screenshots/deushima-redline-t.png) |
 
-| Personajes Kenney | Nombres de aliados |
+| Personajes Quaternius | Nombres de aliados |
 |---|---|
 | ![Personajes](screenshots/deushima-characters.png) | ![Tags](screenshots/deushima-ally-tags.png) |
 
@@ -106,16 +102,15 @@ Abrir **http://127.0.0.1:8095/**. El servidor escucha en `0.0.0.0` para LAN.
 | Mouse | Apuntar |
 | Click izq. | Disparar |
 | Click der. | Zoom AWP |
-| R | Recargar / reiniciar run en Surf |
+| R | Recargar |
 | 1 / 2 / 3 | Primaria / secundaria / cuchillo |
 | Shift | Caminar |
 | Ctrl | Agacharse |
 | Space | Saltar |
-| B | Comprar (bombardeo) |
+| B | Comprar |
 | Tab | Marcador |
 | Esc | Pausa / configuración |
 
-En **Surf**: usá A/D en el aire para mantener velocidad; R reinicia el run.
 
 ## Arquitectura
 
@@ -125,16 +120,14 @@ server.mjs                   servidor estático
 src/main.js                  bootstrap
 src/game.js                  motor, cámara, mapas, input, loop
 src/duel.js                  1v1 rápido a 13, muerte y auto-ronda
-src/surf.js                  timer/checkpoints del surf
-src/characters.js            modelos Kenney (FBX + skins + animaciones)
+src/characters.js            soldados Quaternius GLB + animaciones
 src/ui/name-tags.js          nombres de aliados a través de paredes
 src/ui/shortcut-guard.js     protección de atajos del navegador
-src/core/player.js           movimiento CS + física surf
+src/core/player.js           movimiento AIM, strafe aéreo y bhop
 src/classic-viewmodel.js     viewmodels GoldSrc
 src/ui/classic.js/css        menú, HUD, pausa/settings DEUSHIMA
 src/world/aim_map.js         arena 1v1
 src/world/assault_map.js     arena Assault
-src/world/surf_map.js        SURF_DEUSHIMA
 src/world/wad.js             texturas WAD originales
 tools/extract-assets.py      extracción GoldSrc
 tools/convert-smds.py        MDL/SMD → JSON
@@ -153,7 +146,6 @@ Estado verificado:
 
 - HUD 102 entradas, 385 sonidos, 33 modelos.
 - Duelo: sin freeze, retardo de muerte, auto-ronda, primero a 13 y empate 12-12.
-- Surf: el jugador avanza por la rampa (20+ u/s) y respawnea al caer.
 - Assault/aim/dust2 cargan con texturas WAD.
 - AIM_REDLINE local contra bots: movimiento, disparo, navegación y combate verificados.
 - Online: lobby/READY/partida/revancha; los tres mapas AIM_REDLINE/AIM_MAP/ASSAULT cargan en ambos clientes.
@@ -170,7 +162,7 @@ npm run build:static
 npm run deploy
 ```
 
-`dist/` contiene branding propio, personajes Kenney y **los sonidos de CS**
+`dist/` contiene branding propio, personajes Quaternius CC0 y **los sonidos de CS**
 (`assets/cs16/sound`). No incluye texturas/modelos/HUD de Valve, por eso
 el build publicado usa HUD y arma procedurales de respaldo. AIM_REDLINE es
 completamente procedural y se puede jugar online desde la URL publicada.

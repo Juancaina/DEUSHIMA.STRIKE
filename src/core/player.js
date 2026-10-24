@@ -7,6 +7,13 @@ const _right = new THREE.Vector3();
 const _wish = new THREE.Vector3();
 const _eye = new THREE.Vector3();
 
+const GROUND_ACCEL = 10;
+const AIR_ACCEL = 10;
+const AIR_WISH_CAP = 0.76;
+const GROUND_FRICTION = 4;
+const STOP_SPEED = 1.9;
+const JUMP_BUFFER = 0.1;
+
 export class Player {
   constructor(game) {
     this.game = game;
@@ -61,6 +68,7 @@ export class Player {
     this.moveSpeed = 5.6;
 
     this.spawnProtection = 0;
+    this._jumpBuffer = 0;
     this._tmp = new THREE.Vector3();
   }
 
@@ -82,6 +90,7 @@ export class Player {
     this.damageFlash = 0;
     this.lastDamageTime = -10;
     this.spawnProtection = 1.0;
+    this._jumpBuffer = 0;
     this.roundKills = 0;
     this.hasBomb = false;
     this.updateCamera(0, true);
@@ -146,19 +155,30 @@ export class Player {
     this.vel.z += wishDir.z * accelSpeed;
   }
 
-  applyFriction(dt, friction = 8.5) {
+  applyFriction(dt, friction = GROUND_FRICTION) {
     const speed = Math.hypot(this.vel.x, this.vel.z);
     if (speed < 0.05) {
       this.vel.x = 0;
       this.vel.z = 0;
       return;
     }
-    const control = Math.max(speed, 1.5);
+    const control = Math.max(speed, STOP_SPEED);
     const drop = control * friction * dt;
     const newSpeed = Math.max(0, speed - drop);
     const scale = newSpeed / speed;
     this.vel.x *= scale;
     this.vel.z *= scale;
+  }
+
+  airAccelerate(wishDir, wishSpeed, dt) {
+    if (wishDir.lengthSq() < 1e-8 || wishSpeed <= 0) return;
+    const cappedWish = Math.min(wishSpeed, AIR_WISH_CAP);
+    const current = this.vel.x * wishDir.x + this.vel.z * wishDir.z;
+    const add = cappedWish - current;
+    if (add <= 0) return;
+    const accelSpeed = Math.min(AIR_ACCEL * wishSpeed * dt, add);
+    this.vel.x += wishDir.x * accelSpeed;
+    this.vel.z += wishDir.z * accelSpeed;
   }
 
   wishDirection() {
@@ -185,10 +205,6 @@ export class Player {
     this.damageFlash = Math.max(0, this.damageFlash - dt * 2);
     this.spawnProtection = Math.max(0, this.spawnProtection - dt);
 
-    if (game.map?.mode === 'surf') {
-      this.updateSurf(dt);
-      return;
-    }
 
     const input = game.input;
     const canMove = game.canMove();
@@ -203,27 +219,34 @@ export class Player {
     else if (this.walking) this.moveSpeed = 3.1;
     else this.moveSpeed = 5.6;
 
+    if (input.wasPressed('Space')) this._jumpBuffer = JUMP_BUFFER;
+    if (game.settings.autoBhop && input.isDown('Space')) this._jumpBuffer = JUMP_BUFFER;
+
     const wish = this.wishDirection();
     if (canMove) {
       if (this.onGround) {
-        this.applyFriction(dt);
-        this.accelerate(wish, this.moveSpeed, 11, dt);
-        if (input.wasPressed('Space')) {
+        // A jump taken on the landing frame keeps horizontal momentum. This is
+        // the key GoldSrc/Quake behavior that makes timed bunnyhops possible.
+        if (this._jumpBuffer > 0) {
           this.vel.y = 5.0;
           this.onGround = false;
+          this._jumpBuffer = 0;
           game.audio.play('jump');
+        } else {
+          this.applyFriction(dt);
+          this.accelerate(wish, this.moveSpeed, GROUND_ACCEL, dt);
         }
       } else {
-        this.accelerate(wish, Math.min(this.moveSpeed, 1.9), 3.2, dt);
-        // Small air control bonus, CS-like.
-        this.accelerate(wish, this.moveSpeed, 1.2, dt);
+        // GoldSrc-style projection cap: total horizontal speed may grow while
+        // only the component along the new wish direction is capped.
+        this.airAccelerate(wish, this.moveSpeed, dt);
       }
     } else if (this.onGround) {
       this.applyFriction(dt, 10);
     }
 
-    if (!game.settings.autoBhop) this.vel.y -= 18 * dt;
-    else this.vel.y -= 18 * dt;
+    this._jumpBuffer = Math.max(0, this._jumpBuffer - dt);
+    this.vel.y -= 18 * dt;
 
     const wasOnGround = this.onGround;
     const fallSpeed = this.vel.y;
@@ -243,89 +266,6 @@ export class Player {
     this.updateCamera(dt);
   }
 
-  updateSurf(dt) {
-    const game = this.game;
-    const input = game.input;
-    if (!game.canMove()) {
-      this.updateCamera(dt);
-      return;
-    }
-    const wish = this.wishDirection();
-    const ramps = game.map?.surfRamps || [];
-    const platforms = game.map?.surfPlatforms || [];
-
-    let surface = null;
-    for (const p of platforms) {
-      if (this.pos.x >= p.x1 && this.pos.x <= p.x2 && this.pos.z >= p.z1 && this.pos.z <= p.z2 && this.pos.y <= p.y + 0.45) {
-        surface = { y: p.y, ramp: null };
-        break;
-      }
-    }
-    if (!surface) {
-      for (const r of ramps) {
-        if (this.pos.x < r.x1 || this.pos.x > r.x2 || this.pos.z < r.z1 || this.pos.z > r.z2) continue;
-        const t = (this.pos.z - r.z1) / Math.max(0.001, r.z2 - r.z1);
-        const y = r.y1 + (r.y2 - r.y1) * t;
-        if (this.pos.y <= y + 0.65 && this.pos.y >= y - 1.4) surface = { y, ramp: r };
-        if (surface) break;
-      }
-    }
-
-    const speed = Math.hypot(this.vel.x, this.vel.z);
-    if (surface) {
-      this.onGround = true;
-      this.pos.y = surface.y + 0.03;
-      this.vel.y = 0;
-      if (surface.ramp) {
-        const r = surface.ramp;
-        const slope = (r.y2 - r.y1) / Math.max(0.001, r.z2 - r.z1);
-        const downhill = slope > 0 ? -1 : 1;
-        this.vel.z += downhill * 22 * dt;
-        this.vel.x += wish.x * 9 * dt;
-        this.vel.z += wish.z * 5 * dt;
-        // fricción muy baja para conservar la velocidad del surf
-        const s = Math.hypot(this.vel.x, this.vel.z);
-        if (s > 0.01) {
-          const drop = Math.max(0.985, 1 - 0.12 * dt);
-          this.vel.x *= drop;
-          this.vel.z *= drop;
-        }
-      } else {
-        this.applyFriction(dt, 4);
-        this.accelerate(wish, Math.max(6.5, Math.min(12, speed + 4)), 14, dt);
-      }
-      if (input.wasPressed('Space') || (input.isDown('Space') && this._surfLandHop)) {
-        this.vel.y = 7.4;
-        this.onGround = false;
-        this.pos.y += 0.05;
-        game.audio?.play?.('jump', { volume: 0.6 });
-      }
-      this._surfLandHop = input.isDown('Space');
-    } else {
-      this.onGround = false;
-      this.vel.y -= 11 * dt;
-      if (wish.lengthSq() > 0) {
-        this.vel.x += wish.x * 16 * dt;
-        this.vel.z += wish.z * 16 * dt;
-      }
-      this._surfLandHop = false;
-    }
-
-    const max = 38;
-    const hs = Math.hypot(this.vel.x, this.vel.z);
-    if (hs > max) {
-      this.vel.x *= max / hs;
-      this.vel.z *= max / hs;
-    }
-    this.pos.x += this.vel.x * dt;
-    this.pos.y += this.vel.y * dt;
-    this.pos.z += this.vel.z * dt;
-    this.speed = Math.hypot(this.vel.x, this.vel.z);
-    this.bobTime += dt * (this.onGround ? 6 : 2);
-    this.bobAmount = expDamp(this.bobAmount, this.onGround ? Math.min(1, this.speed / 10) : 0, 8, dt);
-    this.decayRecoil(dt);
-    this.updateCamera(dt);
-  }
 
   updateBobAndSteps(dt) {
     const game = this.game;

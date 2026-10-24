@@ -82,6 +82,8 @@ export class RemoteAvatar {
     this.yaw = 0;
     this.pitch = 0;
     this.crouchAmount = 0;
+    this.weaponId = this.team === 'T' ? 'glock' : 'usp';
+    this.onGround = true;
     this.alive = true;
     this.radius = RADIUS;
 
@@ -89,7 +91,10 @@ export class RemoteAvatar {
     this._targetYaw = 0;
     this._targetPitch = 0;
     this._targetCrouch = 0;
+    this._targetWeaponId = this.weaponId;
+    this._targetOnGround = true;
     this._targetAlive = true;
+    this._networkSpeed = null;
 
     this._time = 0;
     this._deathTime = 0;
@@ -174,10 +179,10 @@ export class RemoteAvatar {
 
     if (game && game.scene) game.scene.add(this.group);
     this._kenney = null;
-    this._attachKenney();
+    this._attachCharacter();
   }
 
-  async _attachKenney() {
+  async _attachCharacter() {
     const lib = this.game?.characters;
     if (!lib) return;
     try {
@@ -186,10 +191,11 @@ export class RemoteAvatar {
       const character = lib.create(this.team, this.name.length + 3);
       if (!character) return;
       this._kenney = character;
+      this._kenney.setWeapon?.(this.weaponId);
       this._body.visible = false;
       this.group.add(character.root);
     } catch (err) {
-      console.warn('[avatar] Kenney no disponible', err);
+      console.warn('[avatar] personaje Quaternius no disponible', err);
     }
   }
 
@@ -227,8 +233,11 @@ export class RemoteAvatar {
     this.yaw = this._targetYaw;
     this.pitch = this._targetPitch;
     this.crouchAmount = this._targetCrouch;
+    this.weaponId = this._targetWeaponId;
+    this.onGround = this._targetOnGround;
+    this._kenney?.setWeapon?.(this.weaponId);
     this.group.position.copy(this.pos);
-    this.group.rotation.y = this.yaw + (this._kenney ? Math.PI : 0);
+    this.group.rotation.y = this.yaw + (this._kenney?.yawOffset || 0);
     this._body.rotation.x = 0;
     this._body.scale.y = 1;
     if (!this.alive) this.playDeath();
@@ -239,7 +248,7 @@ export class RemoteAvatar {
    * Estado de red recibido del otro peer.
    * @param {{x:number,y:number,z:number}|THREE.Vector3} pos
    */
-  setTarget(pos, yaw = 0, pitch = 0, crouch = false, alive = true) {
+  setTarget(pos, yaw = 0, pitch = 0, crouch = false, alive = true, weaponId = null, onGround = true, moveSpeed = null) {
     if (this._disposed) return;
     if (pos) {
       const x = Number(pos.x);
@@ -254,6 +263,10 @@ export class RemoteAvatar {
     const nextPitch = Number(pitch);
     if (Number.isFinite(nextPitch)) this._targetPitch = clamp(nextPitch, -1.45, 1.45);
     this._targetCrouch = crouch ? 1 : 0;
+    if (typeof weaponId === 'string' && weaponId) this._targetWeaponId = weaponId;
+    this._targetOnGround = onGround !== false;
+    const nextSpeed = Number(moveSpeed);
+    this._networkSpeed = Number.isFinite(nextSpeed) && nextSpeed >= 0 ? nextSpeed : null;
 
     const nextAlive = alive !== false;
     this._targetAlive = nextAlive;
@@ -283,13 +296,16 @@ export class RemoteAvatar {
     this.yaw += yawDiff * (1 - Math.exp(-16 * step));
     this.pitch = lerp(this.pitch, this._targetPitch, 1 - Math.exp(-14 * step));
     this.crouchAmount = lerp(this.crouchAmount, this._targetCrouch, 1 - Math.exp(-12 * step));
+    this.weaponId = this._targetWeaponId;
+    this.onGround = this._targetOnGround;
 
     const moved = Math.hypot(this.pos.x - prevX, this.pos.z - prevZ);
     const instantSpeed = step > 0 ? moved / step : 0;
-    this._speed = lerp(this._speed, instantSpeed, 1 - Math.exp(-10 * step));
+    const targetSpeed = this._networkSpeed ?? instantSpeed;
+    this._speed = lerp(this._speed, targetSpeed, 1 - Math.exp(-10 * step));
 
     this.group.position.copy(this.pos);
-    this.group.rotation.y = this.yaw + (this._kenney ? Math.PI : 0);
+    this.group.rotation.y = this.yaw + (this._kenney?.yawOffset || 0);
     this.group.rotation.x = 0;
 
     // Agachado: comprimir el cuerpo desde los pies.
@@ -321,13 +337,17 @@ export class RemoteAvatar {
       this._armR.rotation.x = swing * 0.35;
     }
 
-    // Modelo Kenney (si estÃ¡ disponible) reemplaza el cuerpo procedural.
+    // Modelo Quaternius (si estÃ¡ disponible) reemplaza el cuerpo procedural.
     if (this._kenney) {
       const moving = this.alive && this._speed > 0.45;
       this._kenney.update(step, {
-        onGround: true,
+        alive: this.alive,
+        onGround: this.onGround,
+        crouching: this.crouchAmount > 0.5,
         pitch: this.pitch,
         yaw: this.yaw,
+        weaponId: this.weaponId,
+        speed: this._speed,
       }, moving);
       const t = this.alive ? 0 : clamp(this._deathTime / DEATH_DURATION, 0, 1);
       this._kenney.root.rotation.x = -t * 1.37;
@@ -365,7 +385,10 @@ export class RemoteAvatar {
     this._hitFlash = 0;
     this._body.rotation.x = 0;
     this._body.position.y = 0;
-    if (this._kenney) this._kenney.root.rotation.x = 0;
+    if (this._kenney) {
+      this._kenney.root.rotation.x = 0;
+      this._kenney.setWeapon?.(this.weaponId);
+    }
     this._legL.rotation.x = 0;
     this._legR.rotation.x = 0;
     this._armL.rotation.x = 0;

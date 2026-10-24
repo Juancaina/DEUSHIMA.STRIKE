@@ -43,17 +43,13 @@ assets/branding/          fondo del menú DEUSHIMA STRIKE
 
 ## Personajes
 
-```
-assets/characters/
-├── characterMedium.fbx   modelo base
-├── idle.fbx / run.fbx / jump.fbx
-├── cyborgFemaleA.png     skin CT
-├── skaterMaleA.png       skin CT alternativa
-├── criminalMaleA.png     skin T
-└── skaterFemaleA.png     skin T alternativa
+```text
+assets/characters/quaternius/
+├── soldier_ct.glb
+└── soldier_t.glb
 ```
 
-Los skins son atlas; mantener tamaño, transparencia y nombres.
+Los soldados Quaternius son GLB animados CC0. La apariencia y las animaciones vienen integradas en cada archivo.
 
 ## Reglas para reemplazar texturas
 
@@ -68,5 +64,4 @@ Los skins son atlas; mantener tamaño, transparencia y nombres.
 - Suelo `aim_1v1`: está sólido, pero se puede mejorar el detalle de arena.
 - Paredes de `aim_1v1` / `cs_assault`: texturas WAD originales de baja resolución.
 - HUD: los números de `640hud` son los originales de CS 1.6 (aspecto pixelado).
-- Skins de personajes Kenney: cambiar color/ropa sin tocar las zonas de la cara
-  si se quiere mantener la legibilidad.
+- Personajes Quaternius: mantener una silueta CT/T legible si se retocan materiales o modelos.

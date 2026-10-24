@@ -5,7 +5,7 @@
  * personal. Esos archivos NO se publican. El build público incluye:
  *   - código de juego
  *   - branding propio
- *   - personajes Kenney (CC0)
+ *   - personajes Quaternius (CC0)
  *
  * Los mapas AIM_REDLINE, AIM_MAP y ASSAULT tienen materiales procedurales de
  * respaldo cuando faltan los WAD; AIM_REDLINE es completamente procedural.

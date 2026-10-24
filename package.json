@@ -2,7 +2,7 @@
   "name": "deushima-strike",
   "version": "2.0.0",
   "private": true,
-  "description": "DEUSHIMA STRIKE — CS 1.6 browser reconstruction with original GoldSrc assets, 1v1 duel and surf",
+  "description": "DEUSHIMA STRIKE — CS 1.6-inspired browser aim arena focused on fast 1v1 and online duels",
   "type": "module",
   "scripts": {
     "start": "node server.mjs",

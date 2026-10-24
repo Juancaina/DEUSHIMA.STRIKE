@@ -11,8 +11,6 @@ import { preloadWadTextures } from './world/wad.js';
 import { buildAssaultMap, ASSAULT_MAP_INFO } from './world/assault_map.js';
 import { buildRedlineMap } from './world/redline_map.js';
 import { DEFAULT_ONLINE_MAP, isOnlineMap, onlineMapLabel } from './world/online_map_pool.js';
-import { buildSurfMap, SURF_MAP_INFO } from './world/surf_map.js';
-import { SurfManager } from './surf.js';
 import { CharacterLibrary } from './characters.js';
 import { NameTagLayer } from './ui/name-tags.js';
 import { WeaponSystem } from './weapons.js';
@@ -242,13 +240,13 @@ export class Game {
 
   handleOnlineClosed(reason) {
     if (this._onlineLeaving) return;
-    this.leaveOnline(reason || 'Se perdiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ la conexiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n con la sala', false);
+    this.leaveOnline(reason || 'Se perdiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ la conexiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³n con la sala', false);
   }
 
   async startOnlineMatch(payload = {}) {
     if (!payload || !payload.role) return;
     if (!isOnlineMap(payload.map) || payload.map !== this.onlineSession?.lobby?.map) {
-      this.onlineUI?.showError?.('El mapa elegido no coincide con la sala. Recargá ambos juegos.');
+      this.onlineUI?.showError?.('El mapa elegido no coincide con la sala. RecargÃƒÂ¡ ambos juegos.');
       return;
     }
     const mapId = payload.map;
@@ -288,7 +286,7 @@ export class Game {
       this.player.assists = 0;
       const roll = payload.spawnRolls?.[team];
       if (!(Number.isFinite(roll) && roll >= 0 && roll < 1))
-        throw new Error('La sala no envió un spawn inicial válido.');
+        throw new Error('La sala no enviÃƒÂ³ un spawn inicial vÃƒÂ¡lido.');
       this.player.reset(team, spawns[Math.floor(roll * spawns.length)]);
       this.player.health = 100;
       this.player.armor = 100;
@@ -317,7 +315,7 @@ export class Game {
       this.input.requestPointerLock();
       this._lockHintShown = false;
       this.ui.showCenterMessage?.(
-        payload.role === 'host' ? 'SOS EL HOST Ãƒâ€šÃ‚Â· PRIMERO A 10 RONDAS' : 'PRIMERO A 10 RONDAS',
+        payload.role === 'host' ? 'SOS EL HOST ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· PRIMERO A 10 RONDAS' : 'PRIMERO A 10 RONDAS',
         2600,
       );
     } catch (err) {
@@ -491,7 +489,7 @@ export class Game {
 
   _setupClassicViewmodel() {
     if (globalThis.__DEUSHIMA_PUBLIC__) {
-      // El build público no incluye mallas GoldSrc: se usa el arma procedural.
+      // El build pÃƒÂºblico no incluye mallas GoldSrc: se usa el arma procedural.
       this.classicVM = null;
       return;
     }
@@ -516,7 +514,7 @@ export class Game {
 
   /**
    * Duelo 1v1 por rondas (modo principal): tres arenas compartidas con online.
-   * Usa un BotManager con un ÃƒÂºnico bot enemigo y el manager Duel.
+   * Usa un BotManager con un ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºnico bot enemigo y el manager Duel.
    */
   async startDuel(config = {}) {
     this.audio.init();
@@ -540,7 +538,7 @@ export class Game {
     this._lockHintShown = false;
     this.state = 'loading';
     this.ui.hideAll();
-    this.ui.showLoading(`Cargando ${mapId} Ã‚Â· duel...`);
+    this.ui.showLoading(`Cargando ${mapId} ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· duel...`);
     await new Promise((r) => requestAnimationFrame(r));
 
     try {
@@ -599,52 +597,6 @@ export class Game {
       console.error(err);
       this.state = 'menu';
       this.ui.showFatalError?.('Error al iniciar el duelo: ' + err.message);
-    }
-  }
-
-  async startSurf() {
-    this.audio.init();
-    this._ignoreUnlockUntil = performance.now() + 2500;
-    this.input.requestPointerLock();
-    this.matchConfig = { mode: 'surf', map: 'surf_deushima', team: 'CT' };
-    this.state = 'loading';
-    this.ui.hideAll();
-    this.ui.showLoading('Cargando surf_deushima...');
-    await new Promise((r) => requestAnimationFrame(r));
-    try {
-      this.disposeMatch();
-      if (!this.map || this.map.id !== 'surf_deushima') {
-        this.map?.dispose?.();
-        this.map = buildSurfMap(this);
-      }
-      this.physics.setColliders(this.map.colliders || []);
-      this.applyMapEnvironment(this.map);
-      this.effects.dispose();
-      this.effects = new Effects(this);
-      this.player.reset('CT', this.map.spawns.CT[0]);
-      this.player.alive = true;
-      this.player.health = 100;
-      this.player.armor = 0;
-      this.player.helmet = false;
-      this.weapons = new WeaponSystem(this);
-      this.weapons.init();
-      this.weapons.giveWeapon?.('knife', { silent: true });
-      this._setupClassicViewmodel();
-      this.bots = null;
-      this.duel = null;
-      this.rounds = new SurfManager(this);
-      this.state = 'playing';
-      this.ui.hideAll();
-      this.ui.showHUD();
-      this.ui.hideLoading?.();
-      this.camera.fov = this.settings.fov;
-      this.camera.updateProjectionMatrix();
-      this.rounds.startMatch();
-      this.audio.startAmbient('aim_1v1');
-    } catch (err) {
-      console.error(err);
-      this.state = 'menu';
-      this.ui.showFatalError?.('Error al iniciar surf: ' + err.message);
     }
   }
 
@@ -793,7 +745,7 @@ export class Game {
     this.audio.stopAmbient();
     this.disposeMatch();
     this.ui.hideHUD();
-    this.ui.showLoading('Cargando menÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº...');
+    this.ui.showLoading('Cargando menÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Âº...');
     const last = this.matchConfig?.map || localStorage.getItem('cs16-lastmap') || 'de_dust2';
     if (this.map) {
       this.map.dispose?.();
@@ -1149,7 +1101,7 @@ export class Game {
         buyTimeLeft: 0,
         scoreCT: Number(onlineHud.scoreHost) || 0,
         scoreT: Number(onlineHud.scoreGuest) || 0,
-        objective: `PRIMERO A ${onlineHud.targetKills || 10} RONDAS Ã‚Â· 1v1`,
+        objective: `PRIMERO A ${onlineHud.targetKills || 10} RONDAS ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· 1v1`,
         teamAlive: this.getAliveCounts(),
         bomb: { planted: false },
         hostages: { total: 0, rescued: 0, carrying: 0 },
@@ -1333,8 +1285,8 @@ export class Game {
     this.camera.fov = this.settings.fov;
     this.camera.updateProjectionMatrix();
     if (data.round) {
-      this.ui.showRoundBanner?.(`RONDA ${data.round}`, this.matchConfig?.mode === 'hostage' ? 'RESCATE DE REHENES' : 'DESACTIVACIÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“N DE BOMBA', 'neutral');
-      this.ui.toast?.(`Ronda ${data.round} ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${formatMoney(this.player.money)}`);
+      this.ui.showRoundBanner?.(`RONDA ${data.round}`, this.matchConfig?.mode === 'hostage' ? 'RESCATE DE REHENES' : 'DESACTIVACIÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“N DE BOMBA', 'neutral');
+      this.ui.toast?.(`Ronda ${data.round} ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â· ${formatMoney(this.player.money)}`);
     }
     if (!this.input.locked && this.state === 'playing') {
       setTimeout(() => {
@@ -1423,7 +1375,7 @@ export class Game {
     if (this.state === 'playing' && !this.input.locked && !this.ui.isOverlayOpen && !this.onlineUI?.isOpen) {
       if (!this._lockHintShown) {
         this._lockHintShown = true;
-        this.ui.showCenterMessage?.('HACÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â° CLIC PARA JUGAR', 3200);
+        this.ui.showCenterMessage?.('HACÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â° CLIC PARA JUGAR', 3200);
       }
     } else if (this.input.locked) {
       this._lockHintShown = false;
@@ -1431,10 +1383,9 @@ export class Game {
 
     if (this.state === 'playing' || this.state === 'roundover') {
       this.player.update(dt);
-      // Seguro contra huecos/roturas del piso o caÃƒÂ­das fuera del mapa.
+      // Seguro contra huecos/roturas del piso o caÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­das fuera del mapa.
       if (
         this.player.alive &&
-        this.map?.mode !== 'surf' &&
         (this.player.pos.y < -6 ||
           this.player.pos.x < (this.map?.bounds?.minX ?? -999) - 8 ||
           this.player.pos.x > (this.map?.bounds?.maxX ?? 999) + 8 ||
